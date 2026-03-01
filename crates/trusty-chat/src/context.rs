@@ -5,6 +5,7 @@ use anyhow::Result;
 use trusty_models::chat::ChatContext;
 
 /// Assembles the retrieval-augmented context for a chat turn.
+#[allow(dead_code)]
 pub struct ContextAssembler {
     memory_limit: usize,
     entity_limit: usize,

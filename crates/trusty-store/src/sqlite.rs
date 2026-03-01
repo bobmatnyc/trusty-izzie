@@ -86,7 +86,7 @@ impl SqliteStore {
     }
 
     /// Retrieve the Gmail history cursor for `user_id`, if one exists.
-    pub fn get_gmail_cursor(&self, user_id: &str) -> Result<Option<GmailHistoryCursor>> {
+    pub fn get_gmail_cursor(&self, _user_id: &str) -> Result<Option<GmailHistoryCursor>> {
         todo!("implement cursor SELECT from sqlite")
     }
 

@@ -45,8 +45,7 @@ impl Embedder {
     ///
     /// Subsequent runs load the cached model from disk.
     pub fn new(model: EmbeddingModel) -> Result<Self> {
-        let text_embedding =
-            TextEmbedding::try_new(InitOptions::new(model.to_fastembed_model()))?;
+        let text_embedding = TextEmbedding::try_new(InitOptions::new(model.to_fastembed_model()))?;
         Ok(Self {
             model: text_embedding,
             model_type: model,
@@ -89,4 +88,36 @@ pub fn init_global_embedder(model: EmbeddingModel) -> Result<()> {
 /// Access the global embedder after initialisation.
 pub fn global_embedder() -> Option<&'static Embedder> {
     GLOBAL_EMBEDDER.get()
+}
+
+// Run with: cargo test -p trusty-embeddings -- --ignored
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn test_embed_returns_correct_dimensions() {
+        let embedder = Embedder::new(EmbeddingModel::AllMiniLmL6V2).unwrap();
+        let vec = embedder.embed("hello world").unwrap();
+        assert_eq!(vec.len(), 384);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_embed_batch_consistency() {
+        let embedder = Embedder::new(EmbeddingModel::AllMiniLmL6V2).unwrap();
+        let first = embedder.embed("consistent input").unwrap();
+        let second = embedder.embed("consistent input").unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_embed_batch_length() {
+        let embedder = Embedder::new(EmbeddingModel::AllMiniLmL6V2).unwrap();
+        let texts = &["first", "second", "third"];
+        let results = embedder.embed_batch(texts).unwrap();
+        assert_eq!(results.len(), 3);
+    }
 }

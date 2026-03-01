@@ -46,12 +46,9 @@ impl MemoryRecaller {
         // BM25 search — TODO: wire tantivy once full-text index is integrated in store
         let keyword_results: Vec<(String, String)> = vec![];
 
-        let fused = self.searcher.search(
-            vector_results,
-            keyword_results,
-            limit,
-            SearchMode::Hybrid,
-        )?;
+        let fused =
+            self.searcher
+                .search(vector_results, keyword_results, limit, SearchMode::Hybrid)?;
 
         // TODO: load full Memory objects from store by ID
         let _ = fused;

@@ -35,6 +35,7 @@ pub enum DaemonResponse {
 }
 
 /// Listens on the configured IPC socket path for incoming commands.
+#[allow(dead_code)]
 pub struct IpcServer {
     socket_path: String,
 }

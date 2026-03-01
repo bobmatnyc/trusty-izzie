@@ -16,8 +16,8 @@ use crate::error::{Result, TrustyError};
 pub async fn load_config(config_path: Option<&str>) -> Result<AppConfig> {
     use config::{Config, Environment, File};
 
-    let mut builder = Config::builder()
-        .add_source(File::with_name("config/default").required(false));
+    let mut builder =
+        Config::builder().add_source(File::with_name("config/default").required(false));
 
     if let Some(path) = config_path {
         builder = builder.add_source(File::with_name(path).required(true));

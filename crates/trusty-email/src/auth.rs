@@ -3,6 +3,7 @@
 use anyhow::Result;
 
 /// Manages Google OAuth2 tokens for the Gmail API.
+#[allow(dead_code)]
 pub struct GoogleAuthClient {
     client_id: String,
     client_secret: String,

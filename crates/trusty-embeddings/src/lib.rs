@@ -7,5 +7,5 @@ pub mod bm25;
 pub mod embedder;
 pub mod hybrid;
 
-pub use embedder::{EmbeddingModel, Embedder};
+pub use embedder::{Embedder, EmbeddingModel};
 pub use hybrid::{HybridSearchResult, HybridSearcher, SearchMode};

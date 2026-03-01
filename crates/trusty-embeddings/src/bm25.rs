@@ -40,14 +40,12 @@ impl Bm25Index {
         let content_field = schema_builder.add_text_field("content", TEXT | STORED);
         let schema = schema_builder.build();
 
-        let index = Index::open_or_create(
-            tantivy::directory::MmapDirectory::open(index_path)?,
-            schema,
-        )?;
+        let index =
+            Index::open_or_create(tantivy::directory::MmapDirectory::open(index_path)?, schema)?;
 
         let reader = index
             .reader_builder()
-            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
 
         let writer = index.writer(50_000_000)?; // 50 MB heap
@@ -77,6 +75,7 @@ impl Bm25Index {
         ))?;
 
         writer.commit()?;
+        self.reader.reload()?;
         Ok(())
     }
 
@@ -114,5 +113,72 @@ impl Bm25Index {
         }
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_index_and_search_basic() {
+        let dir = TempDir::new().unwrap();
+        let index = Bm25Index::open(dir.path()).unwrap();
+
+        index.index_document("doc1", "the quick brown fox").unwrap();
+        index.index_document("doc2", "lazy dog sleeps").unwrap();
+        index
+            .index_document("doc3", "rust programming language")
+            .unwrap();
+
+        let results = index.search("fox", 10).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "doc1");
+    }
+
+    #[test]
+    fn test_update_document() {
+        let dir = TempDir::new().unwrap();
+        let index = Bm25Index::open(dir.path()).unwrap();
+
+        index
+            .index_document("doc1", "original content here")
+            .unwrap();
+        index
+            .index_document("doc1", "updated content replacement")
+            .unwrap();
+
+        // "original" should no longer match after update
+        let old_results = index.search("original", 10).unwrap();
+        assert!(old_results.is_empty());
+
+        // "replacement" should match the updated content
+        let new_results = index.search("replacement", 10).unwrap();
+        assert_eq!(new_results.len(), 1);
+        assert_eq!(new_results[0].id, "doc1");
+        assert!(new_results[0].content.contains("replacement"));
+    }
+
+    #[test]
+    fn test_search_empty_index() {
+        let dir = TempDir::new().unwrap();
+        let index = Bm25Index::open(dir.path()).unwrap();
+
+        let results = index.search("anything", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_no_match() {
+        let dir = TempDir::new().unwrap();
+        let index = Bm25Index::open(dir.path()).unwrap();
+
+        index.index_document("doc1", "the quick brown fox").unwrap();
+        index.index_document("doc2", "lazy dog sleeps").unwrap();
+
+        let results = index.search("elephant", 10).unwrap();
+        assert!(results.is_empty());
     }
 }

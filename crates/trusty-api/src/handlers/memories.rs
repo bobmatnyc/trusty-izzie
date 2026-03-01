@@ -43,9 +43,6 @@ pub async fn search_memories(
 }
 
 /// `DELETE /v1/memories/:id` — delete a memory by ID.
-pub async fn delete_memory(
-    State(_state): State<AppState>,
-    Path(_id): Path<Uuid>,
-) -> StatusCode {
+pub async fn delete_memory(State(_state): State<AppState>, Path(_id): Path<Uuid>) -> StatusCode {
     todo!("delete memory from LanceDB by UUID")
 }

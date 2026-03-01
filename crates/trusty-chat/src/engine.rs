@@ -6,6 +6,7 @@ use uuid::Uuid;
 use trusty_models::chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
 
 /// Drives the conversation loop: context assembly → LLM call → tool dispatch → save.
+#[allow(dead_code)]
 pub struct ChatEngine {
     http: reqwest::Client,
     api_base: String,
@@ -16,12 +17,7 @@ pub struct ChatEngine {
 
 impl ChatEngine {
     /// Construct the chat engine.
-    pub fn new(
-        api_base: String,
-        api_key: String,
-        model: String,
-        max_tool_iterations: u32,
-    ) -> Self {
+    pub fn new(api_base: String, api_key: String, model: String, max_tool_iterations: u32) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()

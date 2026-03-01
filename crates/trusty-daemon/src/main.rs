@@ -40,9 +40,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = load_config(cli.config.as_deref()).await?;
 
-    init_logging(
-        &std::env::var("TRUSTY_LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
-    );
+    init_logging(&std::env::var("TRUSTY_LOG_LEVEL").unwrap_or_else(|_| "info".to_string()));
 
     match cli.command {
         DaemonCmd::Start { foreground } => {
@@ -106,7 +104,9 @@ async fn run_daemon(config: trusty_models::config::AppConfig) -> Result<()> {
                 info!("sync tick (stub)");
                 Ok(())
             },
-            async { shutdown_rx.await.ok(); },
+            async {
+                shutdown_rx.await.ok();
+            },
         )
         .await?;
 

@@ -4,8 +4,8 @@ use anyhow::Result;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
-use trusty_core::{init_logging, load_config};
 use trusty_api::{routes::build_router, AppState};
+use trusty_core::{init_logging, load_config};
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::memory::Memory;
 use crate::entity::Entity;
+use crate::memory::Memory;
 
 /// Role of a message sender within a chat conversation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

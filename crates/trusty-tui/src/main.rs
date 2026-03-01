@@ -58,9 +58,7 @@ impl App {
                 "Hi! I'm trusty-izzie. How can I help you today?".to_string(),
             )],
             input: String::new(),
-            entities: vec![
-                "Loading entities...".to_string(),
-            ],
+            entities: vec!["Loading entities...".to_string()],
             running: true,
             focus: Focus::Chat,
         }
@@ -165,8 +163,12 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .flat_map(|(role, content)| {
             let role_style = match role.as_str() {
-                "user" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                "assistant" => Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                "user" => Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+                "assistant" => Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
                 _ => Style::default(),
             };
             let header = Line::from(Span::styled(format!("{}: ", role), role_style));

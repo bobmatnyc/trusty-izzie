@@ -4,6 +4,7 @@ use anyhow::Result;
 use trusty_models::email::EmailMessage;
 
 /// Wraps the Gmail API with typed methods.
+#[allow(dead_code)]
 pub struct GmailClient {
     http: reqwest::Client,
     access_token: String,

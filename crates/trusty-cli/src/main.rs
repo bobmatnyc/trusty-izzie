@@ -193,7 +193,10 @@ async fn run_chat(_args: ChatArgs, _config: trusty_models::config::AppConfig) ->
 async fn run_entity(cmd: EntityCommand, _config: trusty_models::config::AppConfig) -> Result<()> {
     match cmd {
         EntityCommand::List(args) => {
-            println!("Listing entities (type={:?}, limit={})", args.r#type, args.limit);
+            println!(
+                "Listing entities (type={:?}, limit={})",
+                args.r#type, args.limit
+            );
             todo!("call API or GraphStore directly and pretty-print entity table")
         }
         EntityCommand::Search(args) => {
@@ -206,7 +209,10 @@ async fn run_entity(cmd: EntityCommand, _config: trusty_models::config::AppConfi
 async fn run_memory(cmd: MemoryCommand, _config: trusty_models::config::AppConfig) -> Result<()> {
     match cmd {
         MemoryCommand::List(args) => {
-            println!("Listing memories (category={:?}, limit={})", args.category, args.limit);
+            println!(
+                "Listing memories (category={:?}, limit={})",
+                args.category, args.limit
+            );
             todo!("query LanceDB and pretty-print memory list")
         }
         MemoryCommand::Search(args) => {
@@ -240,10 +246,13 @@ async fn run_daemon(cmd: DaemonCommand, config: trusty_models::config::AppConfig
 
 async fn run_auth(_args: AuthArgs, _config: trusty_models::config::AppConfig) -> Result<()> {
     println!("Starting Google OAuth2 flow...");
-    todo!("build auth URL, open browser, start local redirect server, exchange code, persist tokens")
+    todo!(
+        "build auth URL, open browser, start local redirect server, exchange code, persist tokens"
+    )
 }
 
-async fn run_config(cmd: ConfigCommand, config: trusty_models::config::AppConfig) -> Result<()> {
+#[allow(dead_code)]
+async fn run_config(cmd: ConfigCommand, _config: trusty_models::config::AppConfig) -> Result<()> {
     match cmd {
         ConfigCommand::Get { key } => {
             println!("Getting config key: {key}");

@@ -65,11 +65,7 @@ impl HybridSearcher {
     /// vector list and `(1 - alpha)` applied to the keyword list.
     ///
     /// Returns a `Vec<(id, fused_score)>` sorted descending by score.
-    pub fn rrf_fuse(
-        &self,
-        vector_ids: &[String],
-        keyword_ids: &[String],
-    ) -> Vec<(String, f64)> {
+    pub fn rrf_fuse(&self, vector_ids: &[String], keyword_ids: &[String]) -> Vec<(String, f64)> {
         let mut scores: HashMap<String, f64> = HashMap::new();
 
         for (rank, id) in vector_ids.iter().enumerate() {
@@ -99,15 +95,24 @@ impl HybridSearcher {
         vector_results: Vec<(String, String)>,
         keyword_results: Vec<(String, String)>,
         limit: usize,
-        _mode: SearchMode,
+        mode: SearchMode,
     ) -> Result<Vec<HybridSearchResult>> {
-        let vector_ids: Vec<String> = vector_results.iter().map(|(id, _)| id.clone()).collect();
-        let keyword_ids: Vec<String> = keyword_results.iter().map(|(id, _)| id.clone()).collect();
+        // Apply mode branching before building rank structures.
+        let (effective_vector, effective_keyword) = match mode {
+            SearchMode::Vector => (vector_results, vec![]),
+            SearchMode::Keyword => (vec![], keyword_results),
+            SearchMode::Hybrid => (vector_results, keyword_results),
+        };
+
+        let vector_ids: Vec<String> = effective_vector.iter().map(|(id, _)| id.clone()).collect();
+        let keyword_ids: Vec<String> = effective_keyword.iter().map(|(id, _)| id.clone()).collect();
 
         // Build a content lookup map (id -> content)
         let mut content_map: HashMap<String, String> = HashMap::new();
-        for (id, content) in vector_results.iter().chain(keyword_results.iter()) {
-            content_map.entry(id.clone()).or_insert_with(|| content.clone());
+        for (id, content) in effective_vector.iter().chain(effective_keyword.iter()) {
+            content_map
+                .entry(id.clone())
+                .or_insert_with(|| content.clone());
         }
 
         // Build rank lookup maps
@@ -144,6 +149,12 @@ impl HybridSearcher {
 mod tests {
     use super::*;
 
+    fn make_pairs(ids: &[&str]) -> Vec<(String, String)> {
+        ids.iter()
+            .map(|id| (id.to_string(), format!("content of {id}")))
+            .collect()
+    }
+
     #[test]
     fn rrf_fuse_ranks_shared_document_higher() {
         let searcher = HybridSearcher::default();
@@ -154,5 +165,80 @@ mod tests {
 
         // doc_b appears in both lists, should score highest
         assert_eq!(fused[0].0, "doc_b");
+    }
+
+    #[test]
+    fn test_vector_only_mode() {
+        let searcher = HybridSearcher::default();
+        let vector = make_pairs(&["v1", "v2"]);
+        let keyword = make_pairs(&["k1", "k2"]);
+
+        let results = searcher
+            .search(vector, keyword, 10, SearchMode::Vector)
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        // Vector-only: results come from vector list in vector rank order
+        assert_eq!(results[0].id, "v1");
+        assert_eq!(results[1].id, "v2");
+        // No keyword rank assigned
+        assert!(results[0].keyword_rank.is_none());
+    }
+
+    #[test]
+    fn test_keyword_only_mode() {
+        let searcher = HybridSearcher::default();
+        let vector = make_pairs(&["v1", "v2"]);
+        let keyword = make_pairs(&["k1", "k2"]);
+
+        let results = searcher
+            .search(vector, keyword, 10, SearchMode::Keyword)
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        // Keyword-only: results come from keyword list in keyword rank order
+        assert_eq!(results[0].id, "k1");
+        assert_eq!(results[1].id, "k2");
+        // No vector rank assigned
+        assert!(results[0].vector_rank.is_none());
+    }
+
+    #[test]
+    fn test_limit_respected() {
+        let searcher = HybridSearcher::default();
+        let vector = make_pairs(&["a", "b", "c", "d", "e"]);
+        let keyword = make_pairs(&["a", "b", "c", "d", "e"]);
+
+        let results = searcher
+            .search(vector, keyword, 3, SearchMode::Hybrid)
+            .unwrap();
+
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_rrf_scores_are_positive() {
+        let searcher = HybridSearcher::default();
+        let vector = make_pairs(&["x", "y"]);
+        let keyword = make_pairs(&["y", "z"]);
+
+        let results = searcher
+            .search(vector, keyword, 10, SearchMode::Hybrid)
+            .unwrap();
+
+        for r in &results {
+            assert!(r.score > 0.0, "expected positive score, got {}", r.score);
+        }
+    }
+
+    #[test]
+    fn test_empty_lists_return_empty() {
+        let searcher = HybridSearcher::default();
+
+        let results = searcher
+            .search(vec![], vec![], 10, SearchMode::Hybrid)
+            .unwrap();
+
+        assert!(results.is_empty());
     }
 }

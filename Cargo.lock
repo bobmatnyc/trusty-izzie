@@ -7501,6 +7501,7 @@ dependencies = [
  "once_cell",
  "serde",
  "tantivy",
+ "tempfile",
  "thiserror 1.0.69",
  "tracing",
  "trusty-models",
