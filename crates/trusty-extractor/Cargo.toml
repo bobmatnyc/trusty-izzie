@@ -1,0 +1,23 @@
+[package]
+name = "trusty-extractor"
+description = "LLM-based entity and relationship extraction from emails via OpenRouter"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+trusty-models = { path = "../trusty-models" }
+trusty-store = { path = "../trusty-store" }
+
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

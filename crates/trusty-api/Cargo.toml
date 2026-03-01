@@ -1,0 +1,33 @@
+[package]
+name = "trusty-api"
+description = "REST API server exposing chat, entities, and memories over HTTP"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "trusty-api"
+path = "src/main.rs"
+
+[lib]
+name = "trusty_api"
+path = "src/lib.rs"
+
+[dependencies]
+trusty-models = { path = "../trusty-models" }
+trusty-core = { path = "../trusty-core" }
+trusty-chat = { path = "../trusty-chat" }
+trusty-store = { path = "../trusty-store" }
+trusty-memory = { path = "../trusty-memory" }
+
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }

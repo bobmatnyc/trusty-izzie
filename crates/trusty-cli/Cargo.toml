@@ -1,0 +1,28 @@
+[package]
+name = "trusty-cli"
+description = "Command-line interface for trusty-izzie — chat, entity search, daemon management"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "trusty"
+path = "src/main.rs"
+
+[dependencies]
+trusty-models = { path = "../trusty-models" }
+trusty-core = { path = "../trusty-core" }
+trusty-chat = { path = "../trusty-chat" }
+trusty-store = { path = "../trusty-store" }
+trusty-memory = { path = "../trusty-memory" }
+
+clap = { workspace = true }
+interprocess = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }

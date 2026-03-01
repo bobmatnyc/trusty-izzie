@@ -1,0 +1,25 @@
+[package]
+name = "trusty-chat"
+description = "Conversation engine: RAG context assembly, tool dispatch, session management"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+trusty-models = { path = "../trusty-models" }
+trusty-store = { path = "../trusty-store" }
+trusty-memory = { path = "../trusty-memory" }
+trusty-extractor = { path = "../trusty-extractor" }
+
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }

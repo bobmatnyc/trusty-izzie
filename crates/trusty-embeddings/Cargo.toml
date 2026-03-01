@@ -1,0 +1,18 @@
+[package]
+name = "trusty-embeddings"
+description = "Local embedding generation (fastembed) and hybrid BM25+vector search"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+trusty-models = { path = "../trusty-models" }
+
+fastembed = { workspace = true }
+tantivy = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+once_cell = { workspace = true }

@@ -1,0 +1,26 @@
+[package]
+name = "trusty-store"
+description = "Persistence layer: LanceDB (vectors), Kuzu (graph), SQLite (auth/config)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+trusty-models = { path = "../trusty-models" }
+trusty-embeddings = { path = "../trusty-embeddings" }
+
+lancedb = { workspace = true }
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+kuzu = { workspace = true }
+rusqlite = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

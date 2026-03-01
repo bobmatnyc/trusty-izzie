@@ -1,0 +1,22 @@
+[package]
+name = "trusty-email"
+description = "Gmail OAuth2 sync — fetches sent mail, manages history cursors"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+trusty-models = { path = "../trusty-models" }
+trusty-store = { path = "../trusty-store" }
+
+reqwest = { workspace = true }
+oauth2 = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+base64 = { workspace = true }

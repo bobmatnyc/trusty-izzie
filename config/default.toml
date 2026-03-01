@@ -1,0 +1,33 @@
+[openrouter]
+base_url = "https://openrouter.ai/api/v1"
+chat_model = "anthropic/claude-sonnet-4-5"
+extraction_model = "mistralai/mistral-small-3.1-24b-instruct"
+embedding_model = "all-MiniLM-L6-v2"   # local, no API call
+max_tokens = 4096
+
+[storage]
+data_dir = "~/.local/share/trusty-izzie"
+lance_path = "lance"
+kuzu_path = "graph"
+sqlite_path = "trusty.db"
+tantivy_path = "search"
+
+[daemon]
+email_sync_interval_secs = 1800   # 30 minutes
+enabled = true
+ipc_socket = "/tmp/trusty-izzie.sock"
+
+[extraction]
+confidence_threshold = 0.85
+min_occurrences = 2
+max_relationships_per_email = 3
+
+[chat]
+max_tool_iterations = 5
+context_memory_limit = 10
+context_entity_limit = 15
+session_compression_threshold = 20
+
+[api]
+port = 3456
+host = "127.0.0.1"
