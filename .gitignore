@@ -48,3 +48,9 @@ migration/migration.log
 
 # KuzuMemory project memories database
 .kuzu-memory/
+
+# Claude MPM agent configuration and memories (local session state)
+.claude-mpm/
+
+# Claude Code local settings
+.claude/
