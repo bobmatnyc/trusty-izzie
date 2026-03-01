@@ -1,7 +1,44 @@
+# Rust build artifacts
 /target
+
+# Environment / secrets
 .env
 .env.local
+.env.*.local
+
+# Local databases — never commit (per-instance data)
 *.db
 *.db-shm
 *.db-wal
-~/.local/share/trusty-izzie/
+data/
+lance/
+kuzu/
+tantivy/
+
+# LanceDB directories (.lance files)
+**/*.lance/
+**/lance/
+
+# Kuzu graph DB
+**/kuzu/
+
+# Tantivy full-text index
+**/tantivy/
+
+# fastembed ONNX model cache
+.fastembed_cache/
+models/
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+
+# Migration artifacts (keep scripts, not outputs)
+migration/output/
+migration/*.jsonl
+migration/*.parquet
+migration/*.json
+migration/migration.log
