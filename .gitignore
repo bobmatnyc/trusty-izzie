@@ -42,3 +42,9 @@ migration/*.jsonl
 migration/*.parquet
 migration/*.json
 migration/migration.log
+
+# MCP Vector Search index directory
+.mcp-vector-search/
+
+# KuzuMemory project memories database
+.kuzu-memory/
