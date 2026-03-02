@@ -15,6 +15,11 @@
 //!   trusty-telegram webhook set --url https://izzie.ngrok.dev/webhook/telegram
 //!   trusty-telegram webhook clear
 
+mod channel;
+mod email_sync;
+mod er_persist;
+mod gdrive;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,11 +32,15 @@ use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use teloxide::prelude::*;
 use teloxide::types::ChatAction;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use trusty_chat::{context::ContextAssembler, engine::ChatEngine, session::SessionManager};
+use trusty_extractor::{EntityExtractor, ExtractorConfig, UserContext};
 use trusty_store::sqlite::SqliteStore;
 use trusty_store::Store;
+
+use er_persist::persist_extraction_result;
+use gdrive::spawn_drive_enrichment;
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -181,6 +190,15 @@ struct IncomingMessage {
     chat: IncomingChat,
     from: Option<IncomingUser>,
     text: Option<String>,
+    document: Option<IncomingDocument>,
+    caption: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+struct IncomingDocument {
+    file_id: String,
+    file_name: Option<String>,
+    mime_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -206,6 +224,11 @@ struct WebhookState {
     allowed_users: Vec<i64>,
     bot_token: String,
     sqlite: Arc<SqliteStore>,
+    extractor: Arc<EntityExtractor>,
+    store: Arc<Store>,
+    user_context: UserContext,
+    min_occurrences: u32,
+    gdrive_token: Option<String>,
 }
 
 async fn health_handler() -> StatusCode {
@@ -349,11 +372,6 @@ async fn webhook_handler(
         None => return StatusCode::OK,
     };
 
-    let text = match msg.text {
-        Some(t) => t,
-        None => return StatusCode::OK,
-    };
-
     let chat_id = msg.chat.id;
 
     // Authorisation check
@@ -368,14 +386,90 @@ async fn webhook_handler(
         }
     }
 
+    // Handle document messages.
+    if let Some(doc) = msg.document.clone() {
+        let caption = msg.caption.clone().unwrap_or_default();
+        let extractor = Arc::clone(&state.extractor);
+        let store = Arc::clone(&state.store);
+        let user_ctx = state.user_context.clone();
+        let min_occ = state.min_occurrences;
+        let gdrive_token = state.gdrive_token.clone();
+        let token = state.bot_token.clone();
+
+        tokio::spawn(async move {
+            let source_ctx = format!(
+                "telegram_file:{}",
+                doc.file_name.as_deref().unwrap_or("unknown")
+            );
+            // Download the document bytes via the Telegram getFile API.
+            let doc_text = download_and_extract_document_text(&token, &doc, chat_id).await;
+
+            if let Some(text) = doc_text {
+                let combined = if caption.is_empty() {
+                    text
+                } else {
+                    format!("{}\n\n{}", caption, text)
+                };
+                if let Ok(result) = extractor
+                    .extract_from_text(&combined, &source_ctx, &user_ctx)
+                    .await
+                {
+                    if let Ok(stats) = persist_extraction_result(&result, &store, min_occ).await {
+                        info!(
+                            entities = stats.entities_written,
+                            staged = stats.entities_staged,
+                            rels = stats.relationships_written,
+                            source = %source_ctx,
+                            "ER extraction from document"
+                        );
+                        if let Some(token) = gdrive_token {
+                            for entity in &result.entities {
+                                spawn_drive_enrichment(
+                                    entity.clone(),
+                                    token.clone(),
+                                    Arc::clone(&store),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        return StatusCode::OK;
+    }
+
+    let text = match msg.text {
+        Some(t) => t,
+        None => return StatusCode::OK,
+    };
+
     // Process chat asynchronously — respond 200 immediately to Telegram.
-    let engine = state.engine.clone();
+    let engine = Arc::clone(&state.engine);
     let token = state.bot_token.clone();
+    let extractor = Arc::clone(&state.extractor);
+    let store = Arc::clone(&state.store);
+    let user_ctx = state.user_context.clone();
+    let min_occ = state.min_occurrences;
+    let gdrive_token = state.gdrive_token.clone();
+    let text_clone = text.clone();
+
     tokio::spawn(async move {
         let session_key = format!("tg_{chat_id}");
         let mut session = SessionManager::new_session(&session_key);
 
-        match engine.chat(&mut session, &text).await {
+        // Check for Google Doc URL in the message text.
+        let gdoc_text = if let Some(ref drive_token) = gdrive_token {
+            extract_gdoc_text(&text_clone, drive_token).await
+        } else {
+            None
+        };
+
+        let full_text = match gdoc_text {
+            Some(ref doc_text) => format!("{}\n\n{}", text_clone, doc_text),
+            None => text_clone.clone(),
+        };
+
+        match engine.chat(&mut session, &text_clone).await {
             Ok(response) => {
                 info!(
                     memories = response.memories_to_save.len(),
@@ -388,11 +482,142 @@ async fn webhook_handler(
                 let _ = send_reply(&token, chat_id, "Sorry, I encountered an error.").await;
             }
         }
+
+        // Fire-and-forget ER extraction from the chat message.
+        if let Ok(result) = extractor
+            .extract_from_text(&full_text, "chat", &user_ctx)
+            .await
+        {
+            if let Ok(stats) = persist_extraction_result(&result, &store, min_occ).await {
+                info!(
+                    entities = stats.entities_written,
+                    staged = stats.entities_staged,
+                    rels = stats.relationships_written,
+                    "ER extraction from chat"
+                );
+                if let Some(token) = gdrive_token {
+                    for entity in &result.entities {
+                        spawn_drive_enrichment(entity.clone(), token.clone(), Arc::clone(&store));
+                    }
+                }
+            }
+        }
     });
 
     StatusCode::OK
 }
 
+/// Detect a Google Doc URL in text and export its content.
+async fn extract_gdoc_text(text: &str, access_token: &str) -> Option<String> {
+    // Match https://docs.google.com/document/d/{id}/...
+    let re = regex::Regex::new(r"https://docs\.google\.com/document/d/([A-Za-z0-9_-]+)").ok()?;
+    let caps = re.captures(text)?;
+    let file_id = caps.get(1)?.as_str();
+
+    let ch = gdrive::GDriveChannel::new(access_token.to_string());
+    match ch.export_doc_text(file_id).await {
+        Ok(text) => Some(text),
+        Err(e) => {
+            warn!(file_id = %file_id, error = %e, "failed to export Google Doc");
+            None
+        }
+    }
+}
+
+/// Download a Telegram document and extract its text content.
+///
+/// Supports PDF (via lopdf), DOCX (via docx-rs), and plain text.
+async fn download_and_extract_document_text(
+    bot_token: &str,
+    doc: &IncomingDocument,
+    _chat_id: i64,
+) -> Option<String> {
+    // Step 1: Get file path from Telegram.
+    let client = reqwest::Client::new();
+    let file_info: serde_json::Value = client
+        .get(format!("https://api.telegram.org/bot{}/getFile", bot_token))
+        .query(&[("file_id", &doc.file_id)])
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    let file_path = file_info["result"]["file_path"].as_str()?;
+
+    // Step 2: Download file bytes.
+    let bytes = client
+        .get(format!(
+            "https://api.telegram.org/file/bot{}/{}",
+            bot_token, file_path
+        ))
+        .send()
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
+
+    let mime = doc
+        .mime_type
+        .as_deref()
+        .unwrap_or("application/octet-stream");
+    let name = doc.file_name.as_deref().unwrap_or("");
+
+    // Step 3: Extract text based on MIME type.
+    if mime == "application/pdf" || name.ends_with(".pdf") {
+        extract_pdf_text(&bytes)
+    } else if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        || name.ends_with(".docx")
+    {
+        extract_docx_text(&bytes)
+    } else {
+        // Try as plain UTF-8 text.
+        String::from_utf8(bytes.to_vec()).ok()
+    }
+}
+
+/// Extract plain text from PDF bytes using lopdf.
+fn extract_pdf_text(bytes: &[u8]) -> Option<String> {
+    use lopdf::Document;
+
+    let doc = Document::load_mem(bytes).ok()?;
+    let page_numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
+    let text = doc.extract_text(&page_numbers).ok()?;
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// Extract plain text from DOCX bytes using docx-rs.
+fn extract_docx_text(bytes: &[u8]) -> Option<String> {
+    let docx = docx_rs::read_docx(bytes).ok()?;
+    let mut text = String::new();
+    for child in &docx.document.children {
+        if let docx_rs::DocumentChild::Paragraph(para) = child {
+            for run_child in &para.children {
+                if let docx_rs::ParagraphChild::Run(run) = run_child {
+                    for run_content in &run.children {
+                        if let docx_rs::RunChild::Text(t) = run_content {
+                            text.push_str(&t.text);
+                        }
+                    }
+                }
+            }
+            text.push('\n');
+        }
+    }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_webhook(
     bot_token: String,
     webhook_url: String,
@@ -400,6 +625,11 @@ async fn run_webhook(
     engine: Arc<ChatEngine>,
     allowed_users: Vec<i64>,
     sqlite: Arc<SqliteStore>,
+    extractor: Arc<EntityExtractor>,
+    store: Arc<Store>,
+    user_context: UserContext,
+    min_occurrences: u32,
+    gdrive_token: Option<String>,
 ) -> Result<()> {
     // Register webhook with Telegram.
     api_set_webhook(&bot_token, &webhook_url).await?;
@@ -409,6 +639,11 @@ async fn run_webhook(
         allowed_users,
         bot_token,
         sqlite,
+        extractor,
+        store,
+        user_context,
+        min_occurrences,
+        gdrive_token,
     });
 
     let app = Router::new()
@@ -543,18 +778,58 @@ async fn main() -> Result<()> {
                 .filter_map(|s| s.trim().parse().ok())
                 .collect();
 
-            let store = Store::open(&data_dir, "42a923e9bd673e38").await?;
-            let assembler = ContextAssembler::new(5, 10).with_lance(Arc::new(store.lance));
+            const INSTANCE_ID: &str = "42a923e9bd673e38";
+            let store = Arc::new(Store::open(&data_dir, INSTANCE_ID).await?);
+            let assembler = ContextAssembler::new(5, 10).with_lance(Arc::clone(&store.lance));
 
             let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
 
             let engine = Arc::new(ChatEngine::new_with_context(
                 config.openrouter.base_url.clone(),
-                api_key,
+                api_key.clone(),
                 config.openrouter.chat_model.clone(),
                 config.chat.max_tool_iterations,
                 assembler,
             ));
+
+            // Build the entity extractor.
+            let extractor = Arc::new(EntityExtractor::new(ExtractorConfig {
+                base_url: config.openrouter.base_url.clone(),
+                api_key: api_key.clone(),
+                model: config.openrouter.extraction_model.clone(),
+                max_tokens: 2048,
+                confidence_threshold: 0.85,
+                max_relationships: 3,
+            }));
+
+            // Build user context from environment / config.
+            let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
+                .unwrap_or_else(|_| "bobmatnyc@gmail.com".to_string());
+            let user_context = UserContext {
+                user_id: INSTANCE_ID.to_string(),
+                email: primary_email.clone(),
+                display_name: primary_email.clone(),
+            };
+
+            let min_occurrences = 2u32;
+            let gdrive_token = sqlite.get_config("google_access_token").ok().flatten();
+
+            // Spawn the background email sync loop.
+            {
+                let store_sync = Arc::clone(&store);
+                let extractor_sync = Arc::clone(&extractor);
+                let user_ctx_sync = user_context.clone();
+                let _sync_handle = tokio::task::spawn(async move {
+                    email_sync::run_email_sync_loop(
+                        store_sync,
+                        extractor_sync,
+                        user_ctx_sync,
+                        3600,
+                        min_occurrences,
+                    )
+                    .await;
+                });
+            }
 
             if allowed.is_empty() {
                 println!("trusty-telegram starting (no user restriction)...");
@@ -571,7 +846,20 @@ async fn main() -> Result<()> {
                         "Webhook URL required. Use --webhook-url <URL> or --poll for long-polling."
                     )
                 })?;
-                run_webhook(token, url, port, engine, allowed, Arc::clone(&sqlite)).await?;
+                run_webhook(
+                    token,
+                    url,
+                    port,
+                    engine,
+                    allowed,
+                    Arc::clone(&store.sqlite),
+                    extractor,
+                    store,
+                    user_context,
+                    min_occurrences,
+                    gdrive_token,
+                )
+                .await?;
             }
         }
 

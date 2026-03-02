@@ -11,7 +11,7 @@ use trusty_models::entity::{
     Entity, EntityType, Relationship, RelationshipStatus, RelationshipType,
 };
 
-use crate::prompt::EXTRACTION_PROMPT;
+use crate::prompt::{EXTRACTION_PROMPT, TEXT_EXTRACTION_PROMPT};
 use crate::types::{ExtractionResult, UserContext};
 
 /// Configuration for the LLM extraction client.
@@ -174,6 +174,78 @@ impl EntityExtractor {
         let tokens_used = response.usage.map(|u| u.total_tokens).unwrap_or(0);
 
         self.parse_extraction_response(&content, email, user_context, tokens_used)
+    }
+
+    /// Extract entities and relationships from free-form text (chat, documents).
+    ///
+    /// Unlike `extract_from_email`, persons are allowed from any part of the text
+    /// where they are explicitly named (not restricted to headers).
+    pub async fn extract_from_text(
+        &self,
+        text: &str,
+        source_context: &str,
+        user_context: &UserContext,
+    ) -> Result<ExtractionResult> {
+        let user_ctx_json = serde_json::to_string_pretty(user_context)?;
+
+        let prompt = TEXT_EXTRACTION_PROMPT
+            .replace("{{USER_CONTEXT}}", &user_ctx_json)
+            .replace("{{TEXT_CONTENT}}", text);
+
+        debug!(source = %source_context, model = %self.config.model, "extracting entities from text");
+
+        let request_body = ChatRequest {
+            model: &self.config.model,
+            messages: vec![
+                Message {
+                    role: "system",
+                    content: "You are an entity extraction assistant. Respond only with JSON.",
+                },
+                Message {
+                    role: "user",
+                    content: &prompt,
+                },
+            ],
+            max_tokens: self.config.max_tokens,
+            temperature: 0.0,
+            response_format: ResponseFormat {
+                r#type: "json_object",
+            },
+        };
+
+        let response = self
+            .http
+            .post(format!("{}/chat/completions", self.config.base_url))
+            .bearer_auth(&self.config.api_key)
+            .json(&request_body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<ChatResponse>()
+            .await?;
+
+        let content = response
+            .choices
+            .into_iter()
+            .next()
+            .map(|c| c.message.content)
+            .unwrap_or_default();
+
+        let tokens_used = response.usage.map(|u| u.total_tokens).unwrap_or(0);
+
+        let mut result = self.parse_extraction_response_text(
+            &content,
+            source_context,
+            user_context,
+            tokens_used,
+        )?;
+
+        // Tag each entity with the source context identifier.
+        for entity in &mut result.entities {
+            entity.source_id = Some(source_context.to_string());
+        }
+
+        Ok(result)
     }
 
     /// Parse the raw JSON string returned by the LLM into an `ExtractionResult`.
@@ -374,6 +446,187 @@ impl EntityExtractor {
                     confidence: rel.confidence,
                     evidence: rel.evidence,
                     source_id: Some(email.id.clone()),
+                    status: RelationshipStatus::Unknown,
+                    first_seen: now,
+                    last_seen: now,
+                })
+            })
+            .collect();
+
+        Ok(ExtractionResult {
+            entities,
+            relationships,
+            overall_confidence,
+            tokens_used,
+            skipped_noise: false,
+        })
+    }
+
+    /// Like `parse_extraction_response` but for free-form text:
+    /// persons are allowed from any source (no body filter).
+    fn parse_extraction_response_text(
+        &self,
+        json_str: &str,
+        source_context: &str,
+        user_context: &UserContext,
+        tokens_used: u32,
+    ) -> Result<ExtractionResult> {
+        let raw: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+            warn!(source = %source_context, error = %e, "failed to parse text extraction JSON");
+            e
+        })?;
+
+        let skipped_noise = raw
+            .get("skipped_noise")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if skipped_noise {
+            return Ok(ExtractionResult {
+                entities: vec![],
+                relationships: vec![],
+                overall_confidence: 1.0,
+                tokens_used,
+                skipped_noise: true,
+            });
+        }
+
+        let overall_confidence = raw
+            .get("overall_confidence")
+            .and_then(|v| v.as_f64())
+            .map(|f| f as f32)
+            .unwrap_or(0.0);
+
+        let now = Utc::now();
+        let user_normalized = normalize_for_match(&user_context.email);
+        let user_name_normalized = normalize_for_match(&user_context.display_name);
+
+        let entities: Vec<Entity> = raw
+            .get("entities")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        let raw_entity: RawEntity = match serde_json::from_value(item.clone()) {
+                            Ok(e) => e,
+                            Err(err) => {
+                                warn!(source = %source_context, error = %err, "skipping unparseable entity");
+                                return None;
+                            }
+                        };
+
+                        if raw_entity.confidence < self.config.confidence_threshold {
+                            return None;
+                        }
+
+                        // Persons from text are always allowed — no source filter here.
+
+                        let norm = &raw_entity.normalized;
+                        if normalize_for_match(norm) == user_normalized
+                            || normalize_for_match(norm) == user_name_normalized
+                        {
+                            return None;
+                        }
+
+                        let entity_type = match parse_entity_type(&raw_entity.entity_type) {
+                            Some(t) => t,
+                            None => {
+                                warn!(
+                                    source = %source_context,
+                                    entity_type = %raw_entity.entity_type,
+                                    "skipping entity with unknown type"
+                                );
+                                return None;
+                            }
+                        };
+
+                        Some(Entity {
+                            id: uuid::Uuid::new_v4(),
+                            user_id: user_context.user_id.clone(),
+                            entity_type,
+                            value: raw_entity.value,
+                            normalized: raw_entity.normalized,
+                            confidence: raw_entity.confidence,
+                            source: raw_entity.source,
+                            source_id: None, // set by caller
+                            context: raw_entity.context,
+                            aliases: raw_entity.aliases,
+                            occurrence_count: 1,
+                            first_seen: now,
+                            last_seen: now,
+                            created_at: now,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut raw_rels: Vec<RawRelationship> = raw
+            .get("relationships")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        let rel: RawRelationship = match serde_json::from_value(item.clone()) {
+                            Ok(r) => r,
+                            Err(err) => {
+                                warn!(source = %source_context, error = %err, "skipping unparseable relationship");
+                                return None;
+                            }
+                        };
+                        if rel.confidence < self.config.confidence_threshold {
+                            return None;
+                        }
+                        Some(rel)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        raw_rels.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        raw_rels.truncate(self.config.max_relationships);
+
+        let relationships: Vec<Relationship> = raw_rels
+            .into_iter()
+            .filter_map(|rel| {
+                let from_norm = normalize_for_match(&rel.from_entity_value);
+                let to_norm = normalize_for_match(&rel.to_entity_value);
+                if from_norm == user_normalized
+                    || from_norm == user_name_normalized
+                    || to_norm == user_normalized
+                    || to_norm == user_name_normalized
+                {
+                    return None;
+                }
+
+                let from_type = match parse_entity_type(&rel.from_entity_type) {
+                    Some(t) => t,
+                    None => return None,
+                };
+                let to_type = match parse_entity_type(&rel.to_entity_type) {
+                    Some(t) => t,
+                    None => return None,
+                };
+                let relationship_type = match parse_relationship_type(&rel.relationship_type) {
+                    Some(t) => t,
+                    None => return None,
+                };
+
+                Some(Relationship {
+                    id: uuid::Uuid::new_v4(),
+                    user_id: user_context.user_id.clone(),
+                    from_entity_type: from_type,
+                    from_entity_value: rel.from_entity_value,
+                    to_entity_type: to_type,
+                    to_entity_value: rel.to_entity_value,
+                    relationship_type,
+                    confidence: rel.confidence,
+                    evidence: rel.evidence,
+                    source_id: Some(source_context.to_string()),
                     status: RelationshipStatus::Unknown,
                     first_seen: now,
                     last_seen: now,

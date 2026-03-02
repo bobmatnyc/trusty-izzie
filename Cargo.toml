@@ -88,6 +88,7 @@ dotenvy = "0.15"
 aes-gcm = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
+hex = "0.4"
 
 # OAuth
 oauth2 = "4"

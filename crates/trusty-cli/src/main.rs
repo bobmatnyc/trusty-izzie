@@ -396,7 +396,7 @@ async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
     };
 
     let store = Store::open(&data_dir(&config), INSTANCE_ID).await?;
-    let assembler = ContextAssembler::new(5, 10).with_lance(Arc::new(store.lance));
+    let assembler = ContextAssembler::new(5, 10).with_lance(Arc::clone(&store.lance));
 
     let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
     let engine = ChatEngine::new_with_context(

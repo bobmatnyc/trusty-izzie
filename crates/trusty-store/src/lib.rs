@@ -15,15 +15,16 @@ pub use sqlite::SqliteStore;
 
 use anyhow::Result;
 use std::path::Path;
+use std::sync::Arc;
 
 /// The unified storage handle. Pass this (wrapped in `Arc`) through the app.
 pub struct Store {
     /// Vector similarity search over memories and entities.
-    pub lance: LanceStore,
+    pub lance: Arc<LanceStore>,
     /// Knowledge graph of entities and relationships.
-    pub graph: GraphStore,
+    pub graph: Arc<GraphStore>,
     /// Auth tokens, history cursors, and application config.
-    pub sqlite: SqliteStore,
+    pub sqlite: Arc<SqliteStore>,
 }
 
 impl Store {
@@ -35,14 +36,10 @@ impl Store {
     pub async fn open(data_dir: &Path, user_id: &str) -> Result<Self> {
         std::fs::create_dir_all(data_dir)?;
 
-        let lance = LanceStore::open(&data_dir.join("lance"), user_id).await?;
-        let graph = GraphStore::open(&data_dir.join("kuzu"))?;
-        let sqlite = SqliteStore::open(&data_dir.join("trusty.db"))?;
-
         Ok(Self {
-            lance,
-            graph,
-            sqlite,
+            lance: Arc::new(LanceStore::open(&data_dir.join("lance"), user_id).await?),
+            graph: Arc::new(GraphStore::open(&data_dir.join("kuzu"))?),
+            sqlite: Arc::new(SqliteStore::open(&data_dir.join("trusty.db"))?),
         })
     }
 }
