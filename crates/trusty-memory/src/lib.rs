@@ -3,8 +3,10 @@
 //! This crate wraps `trusty-store` and `trusty-embeddings` to provide a
 //! high-level interface for saving and retrieving memories during chat.
 
+pub mod decay;
 pub mod recall;
 pub mod store;
 
+pub use decay::{compute_strength, rank_memories, ranking_score, RankedMemory};
 pub use recall::MemoryRecaller;
 pub use store::MemoryStore;

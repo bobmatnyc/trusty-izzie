@@ -7,5 +7,5 @@ pub mod extractor;
 pub mod prompt;
 pub mod types;
 
-pub use extractor::EntityExtractor;
+pub use extractor::{is_noise_email, EntityExtractor};
 pub use types::{ExtractionResult, UserContext};
