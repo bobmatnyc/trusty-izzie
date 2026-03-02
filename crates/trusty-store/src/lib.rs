@@ -29,12 +29,14 @@ pub struct Store {
 impl Store {
     /// Open all three storage backends rooted at `data_dir`.
     ///
+    /// `user_id` is used to tag LanceDB records (single-tenant: one value per instance).
+    ///
     /// Directories are created automatically if they do not exist.
-    pub async fn open(data_dir: &Path) -> Result<Self> {
+    pub async fn open(data_dir: &Path, user_id: &str) -> Result<Self> {
         std::fs::create_dir_all(data_dir)?;
 
-        let lance = LanceStore::open(&data_dir.join("lance")).await?;
-        let graph = GraphStore::open(&data_dir.join("graph"))?;
+        let lance = LanceStore::open(&data_dir.join("lance"), user_id).await?;
+        let graph = GraphStore::open(&data_dir.join("kuzu"))?;
         let sqlite = SqliteStore::open(&data_dir.join("trusty.db"))?;
 
         Ok(Self {

@@ -37,18 +37,12 @@ impl MemoryStore {
         let now = chrono::Utc::now();
         let id = Uuid::new_v4();
 
-        // Persist to LanceDB
-        self.store
-            .lance
-            .upsert_memory(&id.to_string(), &embedding, content)
-            .await?;
-
         let memory = Memory {
             id,
             user_id: user_id.to_string(),
             category,
             content: content.to_string(),
-            embedding: Some(embedding),
+            embedding: Some(embedding.clone()),
             related_entities,
             source_id,
             importance,
@@ -57,6 +51,9 @@ impl MemoryStore {
             created_at: now,
             updated_at: now,
         };
+
+        // Persist to LanceDB
+        self.store.lance.upsert_memory(&memory, embedding).await?;
 
         Ok(memory)
     }

@@ -58,9 +58,9 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Storage — LanceDB
 lancedb = "0.13"
-arrow = { version = "53", features = ["prettyprint"] }
-arrow-array = "53"
-arrow-schema = "53"
+arrow = { version = "52", features = ["prettyprint"] }
+arrow-array = "52"
+arrow-schema = "52"
 
 # Graph DB
 kuzu = "0.9"
