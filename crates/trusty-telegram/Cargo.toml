@@ -17,6 +17,7 @@ trusty-store = { path = "../trusty-store" }
 trusty-chat = { path = "../trusty-chat" }
 
 teloxide = { workspace = true }
+axum = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -24,3 +25,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 dotenvy = { workspace = true }
 clap = { workspace = true }
+reqwest = { workspace = true }
