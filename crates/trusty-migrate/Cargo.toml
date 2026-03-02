@@ -1,0 +1,26 @@
+[package]
+name = "trusty-migrate"
+description = "One-time LanceDB schema migration: adds canonical `id` column to Python-migrated tables"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "trusty-migrate"
+path = "src/main.rs"
+
+[dependencies]
+lancedb = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+trusty-core = { path = "../trusty-core" }

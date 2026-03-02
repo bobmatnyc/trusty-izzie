@@ -41,6 +41,9 @@ help:
 	@echo "Chat (CLI):"
 	@echo "  make chat           Interactive chat via CLI (builds first if needed)"
 	@echo ""
+	@echo "Migration:"
+	@echo "  make migrate        Add canonical id column to LanceDB tables (one-time)"
+	@echo ""
 	@echo "Email Sync:"
 	@echo "  make sync           Trigger an immediate Gmail sync"
 	@echo "  make auth           Run Google OAuth2 login flow"
@@ -49,6 +52,18 @@ help:
 	@echo "  make telegram-pair  Pair a Telegram bot token (prompts interactively)"
 	@echo "  make telegram       Start the Telegram bot"
 	@echo "  make telegram-stop  Stop the Telegram bot"
+	@echo ""
+	@echo "Release:"
+	@echo "  make version-patch  Bump patch version (0.1.0 → 0.1.1) and commit"
+	@echo "  make version-minor  Bump minor version (0.1.0 → 0.2.0) and commit"
+	@echo "  make version-major  Bump major version (0.1.0 → 1.0.0) and commit"
+	@echo "  make tag            Tag current version without bumping"
+	@echo "  make release        Patch bump + build + tag + push"
+	@echo "  make release-minor  Minor bump + build + tag + push"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test-features       Test all CLI features against real DB (dry-run)"
+	@echo "  make test-features-chat  Same + live chat (uses OpenRouter tokens)"
 	@echo ""
 	@echo "Dev:"
 	@echo "  make test           Run all unit tests"
@@ -116,6 +131,10 @@ chat:
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 
+.PHONY: migrate
+migrate:
+	@bash scripts/migrate-lance-schema.sh
+
 .PHONY: sync
 sync:
 	@bash scripts/sync.sh
@@ -137,6 +156,42 @@ telegram: build
 .PHONY: telegram-stop
 telegram-stop:
 	@bash scripts/telegram-stop.sh
+
+# ── Release / versioning ──────────────────────────────────────────────────────
+
+.PHONY: version-patch
+version-patch:
+	@bash scripts/version-bump.sh patch
+
+.PHONY: version-minor
+version-minor:
+	@bash scripts/version-bump.sh minor
+
+.PHONY: version-major
+version-major:
+	@bash scripts/version-bump.sh major
+
+.PHONY: tag
+tag:
+	@bash scripts/release.sh --tag-only
+
+.PHONY: release
+release: build
+	@bash scripts/release.sh patch
+
+.PHONY: release-minor
+release-minor: build
+	@bash scripts/release.sh minor
+
+# ── Feature tests ─────────────────────────────────────────────────────────────
+
+.PHONY: test-features
+test-features:
+	@bash scripts/test-features.sh
+
+.PHONY: test-features-chat
+test-features-chat:
+	@bash scripts/test-features.sh --chat
 
 # ── Dev tools ────────────────────────────────────────────────────────────────
 

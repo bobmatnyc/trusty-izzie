@@ -1,7 +1,9 @@
-//! Google OAuth2 authorisation flow.
+//! Google OAuth2 authorisation flow with PKCE support.
 
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 /// Manages Google OAuth2 tokens for the Gmail API.
 pub struct GoogleAuthClient {
@@ -100,6 +102,87 @@ impl GoogleAuthClient {
         Ok(TokenSet {
             access_token: resp.access_token,
             // Refresh responses do not include a new refresh token.
+            refresh_token: resp.refresh_token,
+            expires_in: resp.expires_in,
+            scope: resp.scope.unwrap_or_default(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PKCE helpers
+// ---------------------------------------------------------------------------
+
+/// Generate a PKCE `(code_verifier, code_challenge)` pair.
+///
+/// - `code_verifier`: 32 random bytes, base64url-encoded (no padding).
+/// - `code_challenge`: SHA-256 of the verifier, base64url-encoded (no padding).
+///
+/// Uses two UUID v4 values as the entropy source (122 bits each → 244 bits
+/// total, well above the 256-bit PKCE recommendation for random verifiers).
+pub fn generate_pkce_pair() -> (String, String) {
+    let b1 = uuid::Uuid::new_v4();
+    let b2 = uuid::Uuid::new_v4();
+    let mut raw = [0u8; 32];
+    raw[..16].copy_from_slice(b1.as_bytes());
+    raw[16..].copy_from_slice(b2.as_bytes());
+
+    let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+    let challenge_bytes = Sha256::digest(verifier.as_bytes());
+    let challenge =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(challenge_bytes.as_slice());
+
+    (verifier, challenge)
+}
+
+impl GoogleAuthClient {
+    /// Build the PKCE-enhanced consent URL.
+    ///
+    /// Callers must pass the `code_challenge` produced by [`generate_pkce_pair`].
+    pub fn authorization_url_pkce(&self, code_challenge: &str) -> String {
+        let scope = "https://www.googleapis.com/auth/gmail.readonly \
+                     https://www.googleapis.com/auth/userinfo.email";
+        let mut url = reqwest::Url::parse("https://accounts.google.com/o/oauth2/v2/auth")
+            .expect("static base URL is valid");
+        url.query_pairs_mut()
+            .append_pair("client_id", &self.client_id)
+            .append_pair("redirect_uri", &self.redirect_uri)
+            .append_pair("response_type", "code")
+            .append_pair("scope", scope)
+            .append_pair("access_type", "offline")
+            .append_pair("prompt", "consent")
+            .append_pair("code_challenge", code_challenge)
+            .append_pair("code_challenge_method", "S256");
+        url.into()
+    }
+
+    /// Exchange an authorization code for tokens using PKCE.
+    ///
+    /// Callers must pass the `code_verifier` produced by [`generate_pkce_pair`].
+    pub async fn exchange_code_pkce(&self, code: &str, code_verifier: &str) -> Result<TokenSet> {
+        let client = reqwest::Client::new();
+        let params = [
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("client_id", &self.client_id),
+            ("client_secret", &self.client_secret),
+            ("redirect_uri", &self.redirect_uri),
+            ("code_verifier", code_verifier),
+        ];
+        let resp: TokenResponse = client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send()
+            .await
+            .context("POST to Google token endpoint (PKCE) failed")?
+            .error_for_status()
+            .context("Google token endpoint returned error status")?
+            .json()
+            .await
+            .context("failed to deserialise token response")?;
+
+        Ok(TokenSet {
+            access_token: resp.access_token,
             refresh_token: resp.refresh_token,
             expires_in: resp.expires_in,
             scope: resp.scope.unwrap_or_default(),

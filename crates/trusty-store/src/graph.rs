@@ -15,8 +15,15 @@ pub struct GraphStore {
 
 impl GraphStore {
     /// Open (or create) a Kuzu database at `path`.
+    ///
+    /// Kuzu creates the database directory itself; we only ensure the *parent*
+    /// directory exists. Creating the target directory upfront causes EEXIST
+    /// failures when a file (e.g. from a Python-created single-file DB) already
+    /// occupies that path.
     pub fn open(path: &Path) -> Result<Self> {
-        std::fs::create_dir_all(path)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let db = kuzu::Database::new(path, kuzu::SystemConfig::default())?;
         let store = Self { db };
         store.migrate()?;

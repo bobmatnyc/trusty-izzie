@@ -1,7 +1,10 @@
 //! trusty — the command-line interface for trusty-izzie.
 
+pub mod log;
+
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
@@ -10,10 +13,13 @@ use uuid::Uuid;
 use trusty_chat::engine::ChatEngine;
 use trusty_chat::session::SessionManager;
 use trusty_core::{init_logging, load_config};
+use trusty_email::auth::{generate_pkce_pair, GoogleAuthClient};
 use trusty_models::config::AppConfig;
 use trusty_models::entity::EntityType;
 use trusty_models::memory::MemoryCategory;
 use trusty_store::{SqliteStore, Store};
+
+use crate::log::{append_interaction, InteractionLog};
 
 const INSTANCE_ID: &str = "42a923e9bd673e38";
 const SESSION_KEY: &str = "chat:current_session";
@@ -63,6 +69,8 @@ enum Command {
     Config(ConfigCommand),
     /// Show process status for daemon and API server.
     Status,
+    /// Show version and build information.
+    Version,
 }
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
@@ -77,6 +85,10 @@ struct ChatArgs {
     /// Use a specific session UUID.
     #[arg(long)]
     session: Option<Uuid>,
+    /// Dry-run: call the LLM but do not save memories or persist the session.
+    /// Shows what would have been written.
+    #[arg(long = "test")]
+    dry_run: bool,
 }
 
 // ── Session ───────────────────────────────────────────────────────────────────
@@ -193,9 +205,10 @@ async fn main() -> Result<()> {
         Command::Entity(cmd) => run_entity(cmd, config).await,
         Command::Memory(cmd) => run_memory(cmd, config).await,
         Command::Sync(args) => run_sync(args),
-        Command::Auth => run_auth(),
+        Command::Auth => run_auth(config).await,
         Command::Config(cmd) => run_config(cmd, config).await,
         Command::Status => run_status(),
+        Command::Version => run_version(),
     }
 }
 
@@ -271,6 +284,20 @@ fn memory_category_label(c: &MemoryCategory) -> &'static str {
 }
 
 /// Map a user-supplied type string (case-insensitive) to a Kuzu label.
+fn entity_type_lance_label(s: &str) -> &'static str {
+    match s.to_lowercase().as_str() {
+        "person" => "Person",
+        "company" => "Company",
+        "project" => "Project",
+        "tool" => "Tool",
+        "topic" => "Topic",
+        "location" => "Location",
+        "action_item" | "actionitem" => "ActionItem",
+        _ => "Unknown",
+    }
+}
+
+#[allow(dead_code)]
 fn entity_type_kuzu_label(s: &str) -> Option<&'static str> {
     match s.to_lowercase().as_str() {
         "person" => Some("Person"),
@@ -302,9 +329,35 @@ fn read_stdin_message() -> Result<String> {
     Ok(trimmed)
 }
 
+/// Truncate a string to at most `max` chars, appending "..." if cut.
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max.saturating_sub(3)])
+    }
+}
+
+/// First `n` chars of `s` (unicode-safe via char boundary).
+fn preview(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        s.to_string()
+    } else {
+        // Walk back to a char boundary
+        let mut end = n;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s[..end].to_string()
+    }
+}
+
 // ── Command implementations ───────────────────────────────────────────────────
 
 async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
+    let t0 = Instant::now();
+    let dry_run = args.dry_run;
+
     let message = match args.message {
         Some(m) => m,
         None => read_stdin_message()?,
@@ -353,8 +406,33 @@ async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
     let response = engine.chat(&mut session, &message).await?;
     print_izzie(&response.reply);
 
-    session_manager.save(&session).await?;
-    sqlite.set_config(SESSION_KEY, &session.id.to_string())?;
+    let duration_ms = t0.elapsed().as_millis() as u64;
+    let reply_preview = preview(&response.reply, 120);
+
+    if dry_run {
+        println!("\n[TEST MODE — read-only, nothing will be saved]\n");
+        // memories_saved is 0 in dry_run (saving is skipped)
+        println!("Would save 0 memories:");
+    } else {
+        session_manager.save(&session).await?;
+        sqlite.set_config(SESSION_KEY, &session.id.to_string())?;
+    }
+
+    let log_path = data_dir(&config).join("interactions.jsonl");
+    let entry = InteractionLog {
+        ts: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        command: "chat",
+        session_id: Some(session.id.to_string()),
+        message: Some(&message),
+        reply_preview: Some(reply_preview),
+        tokens: None,
+        duration_ms,
+        memories_saved: Some(0),
+        query: None,
+        result_count: None,
+        dry_run,
+    };
+    let _ = append_interaction(&log_path, &entry);
 
     Ok(())
 }
@@ -422,32 +500,72 @@ async fn run_session(cmd: SessionCommand, config: AppConfig) -> Result<()> {
 }
 
 async fn run_entity(cmd: EntityCommand, config: AppConfig) -> Result<()> {
+    let t0 = Instant::now();
     let store = open_store(&config).await?;
+    let log_path = data_dir(&config).join("interactions.jsonl");
 
     match cmd {
         EntityCommand::List(args) => {
-            let kuzu_label = args.r#type.as_deref().and_then(entity_type_kuzu_label);
-            if args.r#type.is_some() && kuzu_label.is_none() {
-                bail!(
-                    "unknown entity type '{}'. Valid types: person, company, project, tool, topic, location, action_item",
-                    args.r#type.unwrap()
-                );
+            // Map user-facing type name to the canonical capitalized form stored in LanceDB.
+            let lance_type = args.r#type.as_deref().map(entity_type_lance_label);
+            if let Some(ref t) = args.r#type {
+                if lance_type == Some("Unknown") {
+                    bail!(
+                        "unknown entity type '{}'. Valid: person, company, project, tool, topic, location, action_item",
+                        t
+                    );
+                }
             }
-            let entities = store.graph.list_entities(kuzu_label, args.limit)?;
+            let entities = store.lance.list_entities(lance_type, args.limit).await?;
             if entities.is_empty() {
                 println!("No entities found.");
-                return Ok(());
+            } else {
+                print_entity_table(&entities);
             }
-            print_entity_table(&entities);
+            let _ = append_interaction(
+                &log_path,
+                &InteractionLog {
+                    ts: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                    command: "entity_list",
+                    session_id: None,
+                    message: None,
+                    reply_preview: None,
+                    tokens: None,
+                    duration_ms: t0.elapsed().as_millis() as u64,
+                    memories_saved: None,
+                    query: None,
+                    result_count: Some(entities.len()),
+                    dry_run: false,
+                },
+            );
         }
         EntityCommand::Search(args) => {
-            let entities = store.graph.search_entities(&args.query, args.limit)?;
+            let entities = store
+                .lance
+                .search_entities_text(&args.query, args.limit)
+                .await?;
             if entities.is_empty() {
                 println!("No entities matched \"{}\".", args.query);
-                return Ok(());
+            } else {
+                println!("Search results for \"{}\":", args.query);
+                print_entity_table(&entities);
             }
-            println!("Search results for \"{}\":", args.query);
-            print_entity_table(&entities);
+            let _ = append_interaction(
+                &log_path,
+                &InteractionLog {
+                    ts: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                    command: "entity_search",
+                    session_id: None,
+                    message: None,
+                    reply_preview: None,
+                    tokens: None,
+                    duration_ms: t0.elapsed().as_millis() as u64,
+                    memories_saved: None,
+                    query: Some(&args.query),
+                    result_count: Some(entities.len()),
+                    dry_run: false,
+                },
+            );
         }
     }
     Ok(())
@@ -481,7 +599,9 @@ fn print_entity_table(entities: &[trusty_models::entity::Entity]) {
 }
 
 async fn run_memory(cmd: MemoryCommand, config: AppConfig) -> Result<()> {
+    let t0 = Instant::now();
     let store = open_store(&config).await?;
+    let log_path = data_dir(&config).join("interactions.jsonl");
 
     match cmd {
         MemoryCommand::List(args) => {
@@ -492,9 +612,25 @@ async fn run_memory(cmd: MemoryCommand, config: AppConfig) -> Result<()> {
             memories.truncate(args.limit);
             if memories.is_empty() {
                 println!("No memories found.");
-                return Ok(());
+            } else {
+                print_memory_table(&memories);
             }
-            print_memory_table(&memories);
+            let _ = append_interaction(
+                &log_path,
+                &InteractionLog {
+                    ts: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                    command: "memory_list",
+                    session_id: None,
+                    message: None,
+                    reply_preview: None,
+                    tokens: None,
+                    duration_ms: t0.elapsed().as_millis() as u64,
+                    memories_saved: None,
+                    query: None,
+                    result_count: Some(memories.len()),
+                    dry_run: false,
+                },
+            );
         }
         MemoryCommand::Search(args) => {
             let q = args.query.to_lowercase();
@@ -503,10 +639,26 @@ async fn run_memory(cmd: MemoryCommand, config: AppConfig) -> Result<()> {
             memories.truncate(args.limit);
             if memories.is_empty() {
                 println!("No memories matched \"{}\".", args.query);
-                return Ok(());
+            } else {
+                println!("Search results for \"{}\":", args.query);
+                print_memory_table(&memories);
             }
-            println!("Search results for \"{}\":", args.query);
-            print_memory_table(&memories);
+            let _ = append_interaction(
+                &log_path,
+                &InteractionLog {
+                    ts: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                    command: "memory_search",
+                    session_id: None,
+                    message: None,
+                    reply_preview: None,
+                    tokens: None,
+                    duration_ms: t0.elapsed().as_millis() as u64,
+                    memories_saved: None,
+                    query: Some(&args.query),
+                    result_count: Some(memories.len()),
+                    dry_run: false,
+                },
+            );
         }
     }
     Ok(())
@@ -548,11 +700,108 @@ fn run_sync(args: SyncArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_auth() -> Result<()> {
-    println!("Google OAuth2 flow not yet implemented in CLI.");
-    println!(
-        "Start the API server and visit https://izzie.ngrok.dev/api/auth/google to authenticate."
-    );
+async fn run_auth(config: AppConfig) -> Result<()> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    let sqlite = open_sqlite(&config)?;
+
+    // Read credentials from environment
+    let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+
+    if client_id.is_empty() || client_secret.is_empty() {
+        bail!(
+            "Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET.\n               Set them in .env or config/default.toml."
+        );
+    }
+
+    let redirect_uri = "http://localhost:8080/callback".to_string();
+    let auth_client = GoogleAuthClient::new(client_id, client_secret, redirect_uri);
+
+    // Generate PKCE pair
+    let (verifier, challenge) = generate_pkce_pair();
+    let auth_url = auth_client.authorization_url_pkce(&challenge);
+
+    println!("\nOpening Google OAuth consent page…");
+    println!("If the browser does not open, visit:\n\n  {}\n", auth_url);
+
+    // Try to open the browser (macOS: `open`, Linux: `xdg-open`)
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(opener).arg(&auth_url).status();
+
+    // Start local callback server on port 8080
+    println!("Waiting for Google to redirect to http://localhost:8080/callback …");
+    let listener = TcpListener::bind("127.0.0.1:8080")
+        .map_err(|e| anyhow::anyhow!("Could not bind port 8080: {e}"))?;
+
+    let code = 'callback: {
+        for stream in listener.incoming() {
+            let stream = match stream {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut reader = BufReader::new(&stream);
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).ok();
+
+            // GET /callback?code=...&state=... HTTP/1.1
+            if let Some(path) = request_line.split_whitespace().nth(1) {
+                if let Some(query) = path.split('?').nth(1) {
+                    let code = query
+                        .split('&')
+                        .find_map(|kv| kv.strip_prefix("code="))
+                        .map(|c| c.to_string());
+
+                    // Send a friendly HTML response
+                    let html = if code.is_some() {
+                        "<html><body><h2>✓ Authenticated!</h2><p>You can close this tab.</p></body></html>"
+                    } else {
+                        "<html><body><h2>✗ No code in redirect.</h2></body></html>"
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html.len(), html
+                    );
+                    let mut writer = &stream;
+                    let _ = writer.write_all(response.as_bytes());
+
+                    if let Some(c) = code {
+                        break 'callback c;
+                    }
+                }
+            }
+        }
+        bail!("OAuth callback listener ended without receiving a code");
+    };
+
+    println!("\nExchanging authorization code for tokens…");
+    let tokens = auth_client
+        .exchange_code_pkce(&code, &verifier)
+        .await
+        .map_err(|e| anyhow::anyhow!("Token exchange failed: {e}"))?;
+
+    // Persist tokens: use primary email as user_id key
+    let user_id =
+        std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| "bobmatnyc@gmail.com".to_string());
+
+    let expires_at = tokens.expires_in as i64 + chrono::Utc::now().timestamp();
+    sqlite.upsert_oauth_token(
+        &user_id,
+        &tokens.access_token,
+        tokens.refresh_token.as_deref(),
+        Some(expires_at),
+        Some(&tokens.scope),
+    )?;
+
+    println!("✓ Authenticated as {user_id}");
+    println!("  Scopes: {}", tokens.scope);
+    println!("  Tokens stored in SQLite (run 'trusty sync' to pull email)");
+
     Ok(())
 }
 
@@ -604,6 +853,13 @@ fn run_status() -> Result<()> {
     Ok(())
 }
 
+fn run_version() -> Result<()> {
+    println!("trusty-izzie {}", env!("CARGO_PKG_VERSION"));
+    println!("  git:   {}", env!("TRUSTY_GIT_HASH"));
+    println!("  built: {}", env!("TRUSTY_BUILD_DATE"));
+    Ok(())
+}
+
 /// Check whether a process with the given PID string is alive.
 /// On Unix: reads /proc/<pid> (Linux) or checks /proc via existence; falls back
 /// to checking if /proc/<pid> exists. On macOS /proc is absent, so we use
@@ -623,12 +879,4 @@ fn is_pid_alive(pid_str: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
-    }
 }
