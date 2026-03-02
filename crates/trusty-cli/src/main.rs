@@ -10,6 +10,7 @@ use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 use uuid::Uuid;
 
+use trusty_chat::context::ContextAssembler;
 use trusty_chat::engine::ChatEngine;
 use trusty_chat::session::SessionManager;
 use trusty_core::{init_logging, load_config};
@@ -394,12 +395,16 @@ async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
         }
     };
 
+    let store = Store::open(&data_dir(&config), INSTANCE_ID).await?;
+    let assembler = ContextAssembler::new(5, 10).with_lance(Arc::new(store.lance));
+
     let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
-    let engine = ChatEngine::new(
+    let engine = ChatEngine::new_with_context(
         config.openrouter.base_url.clone(),
         api_key,
         config.openrouter.chat_model.clone(),
         config.chat.max_tool_iterations,
+        assembler,
     );
 
     print_you(&message);

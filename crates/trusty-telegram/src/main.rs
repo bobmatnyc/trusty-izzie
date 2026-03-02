@@ -29,8 +29,9 @@ use teloxide::prelude::*;
 use teloxide::types::ChatAction;
 use tracing::{error, info};
 
-use trusty_chat::{engine::ChatEngine, session::SessionManager};
+use trusty_chat::{context::ContextAssembler, engine::ChatEngine, session::SessionManager};
 use trusty_store::sqlite::SqliteStore;
+use trusty_store::Store;
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -542,13 +543,17 @@ async fn main() -> Result<()> {
                 .filter_map(|s| s.trim().parse().ok())
                 .collect();
 
+            let store = Store::open(&data_dir, "42a923e9bd673e38").await?;
+            let assembler = ContextAssembler::new(5, 10).with_lance(Arc::new(store.lance));
+
             let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
 
-            let engine = Arc::new(ChatEngine::new(
+            let engine = Arc::new(ChatEngine::new_with_context(
                 config.openrouter.base_url.clone(),
                 api_key,
                 config.openrouter.chat_model.clone(),
                 config.chat.max_tool_iterations,
+                assembler,
             ));
 
             if allowed.is_empty() {

@@ -72,8 +72,10 @@ pub struct StructuredResponse {
     pub reply: String,
     /// Zero or more new memories the LLM decided should be stored.
     pub memories_to_save: Vec<MemoryToSave>,
-    /// Optional list of entity IDs the response draws upon.
-    pub referenced_entities: Vec<Uuid>,
+    /// Optional list of entity normalized values the response draws upon.
+    /// The LLM returns normalized strings (e.g. "bob_matsuoka"), not UUIDs.
+    #[serde(default)]
+    pub referenced_entities: Vec<String>,
 }
 
 /// A memory the LLM is requesting be persisted.

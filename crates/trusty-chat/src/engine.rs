@@ -6,6 +6,8 @@ use uuid::Uuid;
 
 use trusty_models::chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
 
+use crate::context::ContextAssembler;
+
 /// Drives the conversation loop: context assembly → LLM call → tool dispatch → save.
 pub struct ChatEngine {
     http: reqwest::Client,
@@ -15,6 +17,7 @@ pub struct ChatEngine {
     /// Reserved for the tool call loop (phase 2 — not yet implemented).
     #[allow(dead_code)]
     max_tool_iterations: u32,
+    context_assembler: ContextAssembler,
 }
 
 // ── OpenRouter request/response types ────────────────────────────────────────
@@ -65,8 +68,25 @@ struct OrchatUsage {
 // ── ChatEngine impl ───────────────────────────────────────────────────────────
 
 impl ChatEngine {
-    /// Construct the chat engine.
+    /// Construct the chat engine with a default (empty) context assembler.
     pub fn new(api_base: String, api_key: String, model: String, max_tool_iterations: u32) -> Self {
+        Self::new_with_context(
+            api_base,
+            api_key,
+            model,
+            max_tool_iterations,
+            ContextAssembler::new(5, 10),
+        )
+    }
+
+    /// Construct the chat engine with a fully configured context assembler.
+    pub fn new_with_context(
+        api_base: String,
+        api_key: String,
+        model: String,
+        max_tool_iterations: u32,
+        context_assembler: ContextAssembler,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
@@ -77,6 +97,7 @@ impl ChatEngine {
             api_key,
             model,
             max_tool_iterations,
+            context_assembler,
         }
     }
 
@@ -100,9 +121,13 @@ impl ChatEngine {
             created_at: chrono::Utc::now(),
         });
 
-        // 2. Build messages for OpenRouter
+        // 2. Assemble RAG context from LanceDB entities and memories
+        let ctx = self.context_assembler.assemble(user_message, "").await?;
+        let context_section = self.context_assembler.render_context(&ctx);
+
+        // 3. Build messages for OpenRouter
         let now = chrono::Utc::now();
-        let system_content = system_prompt(now);
+        let system_content = system_prompt(now, &context_section);
 
         let mut messages: Vec<OrchatMessage> = vec![OrchatMessage {
             role: "system".to_string(),
@@ -122,7 +147,7 @@ impl ChatEngine {
             });
         }
 
-        // 3. Call OpenRouter
+        // 4. Call OpenRouter
         let url = format!("{}/chat/completions", self.api_base);
         let request_body = OrchatRequest {
             model: &self.model,
@@ -167,10 +192,11 @@ impl ChatEngine {
 
         let token_count = or_response.usage.map(|u| u.total_tokens);
 
-        // 4. Parse StructuredResponse with fallback
-        let structured = parse_response(&raw_content);
+        // 5. Parse StructuredResponse with fallback; clean trailing JSON fence from reply.
+        let mut structured = parse_response(&raw_content);
+        structured.reply = clean_reply(&structured.reply);
 
-        // 5. Append assistant message
+        // 6. Append assistant message
         session.messages.push(ChatMessage {
             id: Uuid::new_v4(),
             session_id: session.id,
@@ -188,18 +214,21 @@ impl ChatEngine {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn system_prompt(now: chrono::DateTime<chrono::Utc>) -> String {
+fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str) -> String {
+    let context_section = if context.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", context)
+    };
     format!(
         r#"You are trusty-izzie, a personal AI assistant with deep knowledge of the user's professional relationships and work context. You run locally on the user's machine.
 
-Today is {}. Current time: {}.
+Today is {}. Current time: {}.{context_section}
 
-You MUST respond with a JSON object in exactly this format:
-{{
-  "reply": "your response to the user (markdown allowed)",
-  "memoriesToSave": [],
-  "referencedEntities": []
-}}
+CRITICAL OUTPUT FORMAT: Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
+
+Required format (output this and nothing else):
+{{"reply":"your response to the user (markdown allowed)","memoriesToSave":[],"referencedEntities":[]}}
 
 Be helpful, concise, and honest. Only include items in memoriesToSave if you learned something genuinely new and useful. Be selective — 0-1 memories per turn is typical."#,
         now.format("%A, %B %d, %Y"),
@@ -222,12 +251,63 @@ fn strip_fences(raw: &str) -> &str {
 }
 
 fn parse_response(raw: &str) -> StructuredResponse {
+    // 1. Try the whole response (after stripping outer fences)
     let cleaned = strip_fences(raw);
-    serde_json::from_str(cleaned).unwrap_or_else(|_| StructuredResponse {
+    if let Ok(s) = serde_json::from_str::<StructuredResponse>(cleaned) {
+        return s;
+    }
+
+    // 2. Model sometimes emits text preamble then a ```json ... ``` block.
+    //    Search for the LAST ```json block in the response.
+    let mut last_fence_pos = None;
+    let mut search_from = 0;
+    while let Some(pos) = raw[search_from..].find("```json") {
+        last_fence_pos = Some(search_from + pos);
+        search_from += pos + 7; // 7 = len("```json")
+    }
+    if let Some(fence_start) = last_fence_pos {
+        let after_open = &raw[fence_start + 7..]; // skip "```json"
+        if let Some(close) = after_open.find("```") {
+            let inner = after_open[..close].trim();
+            if let Ok(s) = serde_json::from_str::<StructuredResponse>(inner) {
+                return s;
+            }
+        }
+    }
+
+    // 3. Try to find any valid JSON object starting with '{' that has a "reply" field.
+    let mut search = raw;
+    while let Some(start) = search.find('{') {
+        let candidate = &search[start..];
+        if let Ok(s) = serde_json::from_str::<StructuredResponse>(candidate) {
+            return s;
+        }
+        search = &search[start + 1..];
+    }
+
+    // 4. Fallback: treat the whole raw string as a plain-text reply.
+    StructuredResponse {
         reply: raw.to_string(),
         memories_to_save: vec![],
         referenced_entities: vec![],
-    })
+    }
+}
+
+/// Remove any trailing ```json ... ``` block that the model sometimes appends
+/// inside the reply field as a "structured output" summary.
+fn clean_reply(reply: &str) -> String {
+    // Look for the LAST occurrence of ```json or ``` in the trimmed reply.
+    // If found, strip from that point onward (and any trailing whitespace before it).
+    let trimmed = reply.trim_end();
+    for fence in &["```json", "```"] {
+        if let Some(pos) = trimmed.rfind(fence) {
+            // Only strip if the fence appears after a newline (not inline code)
+            if pos == 0 || trimmed.as_bytes().get(pos - 1) == Some(&b'\n') {
+                return trimmed[..pos].trim_end().to_string();
+            }
+        }
+    }
+    trimmed.to_string()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -264,9 +344,26 @@ mod tests {
     #[test]
     fn test_system_prompt_contains_date() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now);
+        let prompt = system_prompt(now, "");
         let year = now.format("%Y").to_string();
         assert!(prompt.contains(&year));
+    }
+
+    #[test]
+    fn test_system_prompt_includes_context_when_nonempty() {
+        let now = chrono::Utc::now();
+        let prompt = system_prompt(
+            now,
+            "## Relevant People & Projects\n- Alice (Person): alice",
+        );
+        assert!(prompt.contains("## Relevant People & Projects"));
+    }
+
+    #[test]
+    fn test_system_prompt_no_context_section_when_empty() {
+        let now = chrono::Utc::now();
+        let prompt = system_prompt(now, "");
+        assert!(!prompt.contains("## Relevant"));
     }
 
     #[test]

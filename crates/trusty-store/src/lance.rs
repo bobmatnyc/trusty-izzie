@@ -442,9 +442,13 @@ impl LanceStore {
         for batch in &batches {
             for row in 0..batch.num_rows() {
                 if let Ok(Some(e)) = entity_from_batch(batch, row) {
-                    if e.value.to_lowercase().contains(&ql)
-                        || e.normalized.to_lowercase().contains(&ql)
-                    {
+                    let ev = e.value.to_lowercase();
+                    let en = e.normalized.to_lowercase();
+                    // Bidirectional match: query-in-entity-value handles direct lookups;
+                    // entity-value-in-query handles natural language ("Who is Bob Matsuoka?").
+                    // Require entity value >= 4 chars to avoid noisy single-word matches.
+                    let reverse_match = ev.len() >= 4 && (ql.contains(&ev) || ql.contains(&en));
+                    if ev.contains(&ql) || en.contains(&ql) || reverse_match {
                         matched.push(e);
                         if matched.len() >= limit {
                             return Ok(matched);
