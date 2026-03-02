@@ -7,10 +7,12 @@ pub mod chat;
 pub mod config;
 pub mod email;
 pub mod entity;
+pub mod event;
 pub mod memory;
 
 pub use chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
 pub use config::{AppConfig, DaemonConfig, ExtractionConfig, OpenRouterConfig, StorageConfig};
 pub use email::{EmailMessage, GmailHistoryCursor};
 pub use entity::{Entity, EntityType, Relationship, RelationshipStatus, RelationshipType};
+pub use event::{EventPayload, EventStatus, EventType, QueuedEvent};
 pub use memory::{Memory, MemoryCategory};

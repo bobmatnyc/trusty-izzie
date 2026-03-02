@@ -1,51 +1,51 @@
 //! The main daemon polling loop.
 
-use anyhow::Result;
 use std::time::Duration;
 use tokio::time;
 use tracing::info;
+use trusty_core::error::TrustyError;
 
-use trusty_models::config::DaemonConfig;
+use crate::dispatcher::EventDispatcher;
 
-/// Runs the recurring email sync loop until a shutdown signal is received.
-pub struct DaemonLoop {
-    config: DaemonConfig,
-}
+/// Drives the recurring event-dispatch loop until a shutdown signal is received.
+pub struct DaemonLoop;
 
 impl DaemonLoop {
-    /// Construct with daemon configuration.
-    pub fn new(config: DaemonConfig) -> Self {
-        Self { config }
+    pub fn new() -> Self {
+        DaemonLoop
     }
 
-    /// Run the loop, calling `on_tick` at each interval.
+    /// Run the dispatch loop, polling every 10 seconds.
     ///
     /// The loop exits cleanly when `shutdown` resolves.
     pub async fn run(
         &self,
-        mut on_tick: impl AsyncFnMut() -> Result<()>,
+        dispatcher: &EventDispatcher,
         shutdown: impl std::future::Future<Output = ()>,
-    ) -> Result<()> {
-        let interval = Duration::from_secs(self.config.email_sync_interval_secs);
-        let mut ticker = time::interval(interval);
-
+    ) -> Result<(), TrustyError> {
+        let mut ticker = time::interval(Duration::from_secs(10));
         tokio::pin!(shutdown);
 
+        info!("Daemon loop started, polling every 10s");
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    info!("daemon tick: running email sync");
-                    if let Err(e) = on_tick().await {
-                        tracing::error!(error = %e, "sync tick failed");
+                    if let Err(e) = dispatcher.tick().await {
+                        tracing::error!(error = %e, "dispatcher tick failed");
                     }
                 }
                 _ = &mut shutdown => {
-                    info!("daemon shutdown signal received");
+                    info!("Daemon received shutdown signal");
                     break;
                 }
             }
         }
-
         Ok(())
+    }
+}
+
+impl Default for DaemonLoop {
+    fn default() -> Self {
+        Self::new()
     }
 }

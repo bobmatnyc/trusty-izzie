@@ -1,11 +1,20 @@
 //! trusty-daemon — the background sync process for trusty-izzie.
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::info;
 
 use trusty_core::{init_logging, load_config};
-use trusty_daemon::{ipc::IpcServer, DaemonLoop};
+use trusty_daemon::{ipc::IpcServer, DaemonLoop, EventDispatcher};
+use trusty_models::config::AppConfig;
+use trusty_models::{EventPayload, EventType};
+use trusty_store::{SqliteStore, Store};
+
+/// Single-tenant instance ID (SHA256 of primary email, first 16 hex chars).
+const INSTANCE_ID: &str = "42a923e9bd673e38";
 
 /// Command-line interface for the daemon process.
 #[derive(Parser)]
@@ -67,12 +76,84 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run the daemon event loop: IPC server + email polling.
-async fn run_daemon(config: trusty_models::config::AppConfig) -> Result<()> {
-    let ipc_server = IpcServer::new(config.daemon.ipc_socket.clone());
-    let daemon_loop = DaemonLoop::new(config.daemon.clone());
+fn expand_data_dir(config: &AppConfig) -> PathBuf {
+    let raw = &config.storage.data_dir;
+    if raw.starts_with('~') {
+        let home = std::env::var("HOME").unwrap_or_default();
+        PathBuf::from(raw.replacen('~', &home, 1))
+    } else {
+        PathBuf::from(raw)
+    }
+}
 
-    // Set up Ctrl-C / SIGTERM shutdown
+/// Seed a recurring event if no pending event of that type exists.
+fn seed_if_absent(
+    sqlite: &SqliteStore,
+    event_type: EventType,
+    payload: EventPayload,
+    scheduled_at: i64,
+) -> Result<()> {
+    let events = sqlite.list_events(Some("pending"), 100)?;
+    if events.iter().any(|e| e.event_type == event_type) {
+        return Ok(());
+    }
+    sqlite.enqueue_event(
+        &event_type,
+        &payload,
+        scheduled_at,
+        event_type.default_priority(),
+        event_type.default_max_retries(),
+        "system",
+        None,
+    )?;
+    info!("Seeded {:?} event", event_type);
+    Ok(())
+}
+
+/// Unix timestamp of next midnight UTC.
+fn midnight_ts() -> i64 {
+    use chrono::{Duration, TimeZone, Utc};
+    let now = Utc::now();
+    let tomorrow = (now + Duration::days(1))
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    Utc.from_utc_datetime(&tomorrow).timestamp()
+}
+
+/// Run the daemon event loop: IPC server + event dispatcher.
+async fn run_daemon(config: AppConfig) -> Result<()> {
+    let data_dir = expand_data_dir(&config);
+    let store = Arc::new(Store::open(&data_dir, INSTANCE_ID).await?);
+
+    // Seed recurring events (idempotent — no-op if already pending).
+    let now = chrono::Utc::now().timestamp();
+    {
+        let sqlite = &store.sqlite;
+        seed_if_absent(
+            sqlite,
+            EventType::EmailSync,
+            EventPayload::EmailSync { force: false },
+            now,
+        )?;
+        seed_if_absent(
+            sqlite,
+            EventType::MemoryDecay,
+            EventPayload::MemoryDecay { min_age_days: None },
+            midnight_ts(),
+        )?;
+        seed_if_absent(
+            sqlite,
+            EventType::CalendarRefresh,
+            EventPayload::CalendarRefresh { lookahead_days: 7 },
+            now,
+        )?;
+    }
+
+    let dispatcher = EventDispatcher::new(store);
+    let ipc_server = IpcServer::new(config.daemon.ipc_socket.clone());
+    let daemon_loop = DaemonLoop::new();
+
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     tokio::spawn(async move {
@@ -80,7 +161,6 @@ async fn run_daemon(config: trusty_models::config::AppConfig) -> Result<()> {
         let _ = shutdown_tx.send(());
     });
 
-    // Run IPC server concurrently
     let ipc_task = tokio::spawn(async move {
         ipc_server
             .serve(|cmd| {
@@ -98,16 +178,9 @@ async fn run_daemon(config: trusty_models::config::AppConfig) -> Result<()> {
     });
 
     daemon_loop
-        .run(
-            || async {
-                // TODO: run full email sync cycle
-                info!("sync tick (stub)");
-                Ok(())
-            },
-            async {
-                shutdown_rx.await.ok();
-            },
-        )
+        .run(&dispatcher, async {
+            shutdown_rx.await.ok();
+        })
         .await?;
 
     ipc_task.abort();

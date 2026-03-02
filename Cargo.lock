@@ -7520,6 +7520,7 @@ name = "trusty-daemon"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "interprocess",

@@ -1,12 +1,17 @@
 //! The core chat completion engine.
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use trusty_models::chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
+use trusty_models::{EventPayload, EventType};
+use trusty_store::SqliteStore;
 
 use crate::context::ContextAssembler;
+use crate::tools::ToolName;
 
 /// Drives the conversation loop: context assembly → LLM call → tool dispatch → save.
 pub struct ChatEngine {
@@ -18,6 +23,8 @@ pub struct ChatEngine {
     #[allow(dead_code)]
     max_tool_iterations: u32,
     context_assembler: ContextAssembler,
+    /// Optional SQLite store for event queue tool dispatch.
+    sqlite: Option<Arc<SqliteStore>>,
 }
 
 // ── OpenRouter request/response types ────────────────────────────────────────
@@ -98,7 +105,105 @@ impl ChatEngine {
             model,
             max_tool_iterations,
             context_assembler,
+            sqlite: None,
         }
+    }
+
+    /// Attach a `SqliteStore` for event-queue tool dispatch.
+    pub fn with_sqlite(mut self, sqlite: Arc<SqliteStore>) -> Self {
+        self.sqlite = Some(sqlite);
+        self
+    }
+
+    /// Execute a chat tool call and return the result as a string.
+    ///
+    /// Returns an error string rather than propagating `Err` so the model can
+    /// receive feedback about what went wrong.
+    pub fn execute_tool(&self, name: &ToolName, input: &serde_json::Value) -> Result<String> {
+        match name {
+            ToolName::ScheduleEvent => self.tool_schedule_event(input),
+            ToolName::CancelEvent => self.tool_cancel_event(input),
+            ToolName::ListEvents => self.tool_list_events(input),
+            _ => Ok("Tool not yet implemented.".to_string()),
+        }
+    }
+
+    fn sqlite_ref(&self) -> Result<&SqliteStore> {
+        self.sqlite
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Event queue unavailable: no SQLite store attached"))
+    }
+
+    fn tool_schedule_event(&self, input: &serde_json::Value) -> Result<String> {
+        let event_type_str = input["event_type"].as_str().unwrap_or("");
+        let scheduled_at_str = input["scheduled_at"].as_str().unwrap_or("");
+
+        let scheduled_at = chrono::DateTime::parse_from_rfc3339(scheduled_at_str)
+            .map_err(|_| anyhow::anyhow!("Invalid scheduled_at format, use ISO 8601"))?;
+        let now = chrono::Utc::now();
+        if scheduled_at.with_timezone(&chrono::Utc) <= now {
+            return Ok("Error: scheduled_at must be in the future".to_string());
+        }
+
+        let event_type = event_type_str
+            .parse::<EventType>()
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let payload = match &event_type {
+            EventType::Reminder => EventPayload::Reminder {
+                message: input["message"].as_str().unwrap_or("Reminder").to_string(),
+                subtitle: input["subtitle"].as_str().map(|s| s.to_string()),
+                url: None,
+            },
+            EventType::EmailSync => EventPayload::EmailSync { force: false },
+            EventType::MemoryDecay => EventPayload::MemoryDecay { min_age_days: None },
+            EventType::CalendarRefresh => EventPayload::CalendarRefresh { lookahead_days: 7 },
+            EventType::EntityExtraction => EventPayload::EntityExtraction {
+                message_ids: vec![],
+                source_event_id: None,
+            },
+        };
+
+        let id = self.sqlite_ref()?.enqueue_event(
+            &event_type,
+            &payload,
+            scheduled_at.timestamp(),
+            event_type.default_priority(),
+            event_type.default_max_retries(),
+            "chat",
+            None,
+        )?;
+        Ok(format!(
+            "Scheduled {} event with ID: {}",
+            event_type_str, id
+        ))
+    }
+
+    fn tool_cancel_event(&self, input: &serde_json::Value) -> Result<String> {
+        let event_id = input["event_id"].as_str().unwrap_or("");
+        self.sqlite_ref()?.cancel_event(event_id)?;
+        Ok(format!("Cancelled event {}", event_id))
+    }
+
+    fn tool_list_events(&self, input: &serde_json::Value) -> Result<String> {
+        let status = input["status"].as_str();
+        let limit = input["limit"].as_i64().unwrap_or(10);
+        let events = self.sqlite_ref()?.list_events(status, limit)?;
+        if events.is_empty() {
+            return Ok("No events found.".to_string());
+        }
+        let mut result = String::new();
+        for e in &events {
+            result.push_str(&format!(
+                "- [{}] {} | {} | scheduled: {} | id: {}\n",
+                e.status.as_str(),
+                e.event_type.as_str(),
+                e.error.as_deref().unwrap_or(""),
+                e.scheduled_at.format("%Y-%m-%d %H:%M UTC"),
+                e.id,
+            ));
+        }
+        Ok(result)
     }
 
     /// Process a single user turn, returning the assistant's reply.

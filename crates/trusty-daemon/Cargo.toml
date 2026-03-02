@@ -25,6 +25,7 @@ trusty-store = { path = "../trusty-store" }
 interprocess = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }

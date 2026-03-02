@@ -25,6 +25,12 @@ pub enum ToolName {
     GetEntityRelationships,
     /// Save a new memory to the store.
     SaveMemory,
+    /// Schedule a future event (reminder, email sync, etc.).
+    ScheduleEvent,
+    /// Cancel a pending event by its ID.
+    CancelEvent,
+    /// List scheduled events, optionally filtered by status.
+    ListEvents,
 }
 
 /// A parsed tool call request from the LLM.
