@@ -701,9 +701,6 @@ fn run_sync(args: SyncArgs) -> Result<()> {
 }
 
 async fn run_auth(config: AppConfig) -> Result<()> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpListener;
-
     let sqlite = open_sqlite(&config)?;
 
     // Read credentials from environment
@@ -716,11 +713,13 @@ async fn run_auth(config: AppConfig) -> Result<()> {
         );
     }
 
-    let redirect_uri = "http://localhost:8080/callback".to_string();
+    let redirect_uri = "https://izzie.ngrok.dev/api/auth/google/callback".to_string();
     let auth_client = GoogleAuthClient::new(client_id, client_secret, redirect_uri);
 
-    // Generate PKCE pair
+    // Generate PKCE pair and store verifier for the axum callback handler.
     let (verifier, challenge) = generate_pkce_pair();
+    sqlite.set_config("oauth_pkce_verifier", &verifier)?;
+
     let auth_url = auth_client.authorization_url_pkce(&challenge);
 
     println!("\nOpening Google OAuth consent page…");
@@ -734,75 +733,25 @@ async fn run_auth(config: AppConfig) -> Result<()> {
     };
     let _ = std::process::Command::new(opener).arg(&auth_url).status();
 
-    // Start local callback server on port 8080
-    println!("Waiting for Google to redirect to http://localhost:8080/callback …");
-    let listener = TcpListener::bind("127.0.0.1:8080")
-        .map_err(|e| anyhow::anyhow!("Could not bind port 8080: {e}"))?;
-
-    let code = 'callback: {
-        for stream in listener.incoming() {
-            let stream = match stream {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let mut reader = BufReader::new(&stream);
-            let mut request_line = String::new();
-            reader.read_line(&mut request_line).ok();
-
-            // GET /callback?code=...&state=... HTTP/1.1
-            if let Some(path) = request_line.split_whitespace().nth(1) {
-                if let Some(query) = path.split('?').nth(1) {
-                    let code = query
-                        .split('&')
-                        .find_map(|kv| kv.strip_prefix("code="))
-                        .map(|c| c.to_string());
-
-                    // Send a friendly HTML response
-                    let html = if code.is_some() {
-                        "<html><body><h2>✓ Authenticated!</h2><p>You can close this tab.</p></body></html>"
-                    } else {
-                        "<html><body><h2>✗ No code in redirect.</h2></body></html>"
-                    };
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        html.len(), html
-                    );
-                    let mut writer = &stream;
-                    let _ = writer.write_all(response.as_bytes());
-
-                    if let Some(c) = code {
-                        break 'callback c;
-                    }
-                }
-            }
+    // Poll SQLite for google_access_token written by the axum callback handler.
+    println!("Waiting for OAuth callback via https://izzie.ngrok.dev/api/auth/google/callback …");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let token = sqlite.get_config("google_access_token")?;
+        if token.as_deref().map(|t| !t.is_empty()).unwrap_or(false) {
+            println!("Authenticated!");
+            println!("  Tokens stored in SQLite (run 'trusty sync' to pull email)");
+            return Ok(());
         }
-        bail!("OAuth callback listener ended without receiving a code");
-    };
-
-    println!("\nExchanging authorization code for tokens…");
-    let tokens = auth_client
-        .exchange_code_pkce(&code, &verifier)
-        .await
-        .map_err(|e| anyhow::anyhow!("Token exchange failed: {e}"))?;
-
-    // Persist tokens: use primary email as user_id key
-    let user_id =
-        std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| "bobmatnyc@gmail.com".to_string());
-
-    let expires_at = tokens.expires_in as i64 + chrono::Utc::now().timestamp();
-    sqlite.upsert_oauth_token(
-        &user_id,
-        &tokens.access_token,
-        tokens.refresh_token.as_deref(),
-        Some(expires_at),
-        Some(&tokens.scope),
-    )?;
-
-    println!("✓ Authenticated as {user_id}");
-    println!("  Scopes: {}", tokens.scope);
-    println!("  Tokens stored in SQLite (run 'trusty sync' to pull email)");
-
-    Ok(())
+        if std::time::Instant::now() >= deadline {
+            bail!(
+                "Timed out after 120s waiting for OAuth callback.\n\
+                 Make sure trusty-telegram is running and the ngrok tunnel is active.\n\
+                 Visit the URL above manually if needed."
+            );
+        }
+    }
 }
 
 async fn run_config(cmd: ConfigCommand, config: AppConfig) -> Result<()> {

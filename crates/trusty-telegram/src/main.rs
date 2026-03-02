@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use axum::extract::{Json, State};
+use axum::extract::{Json, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::Router;
@@ -192,15 +192,151 @@ struct IncomingUser {
     id: i64,
 }
 
+/// Query parameters for the Google OAuth callback route.
+#[derive(serde::Deserialize)]
+struct OAuthCallbackQuery {
+    code: Option<String>,
+    error: Option<String>,
+}
+
 /// Shared state for the axum webhook handler.
 struct WebhookState {
     engine: Arc<ChatEngine>,
     allowed_users: Vec<i64>,
     bot_token: String,
+    sqlite: Arc<SqliteStore>,
 }
 
 async fn health_handler() -> StatusCode {
     StatusCode::OK
+}
+
+async fn oauth_callback_handler(
+    State(state): State<Arc<WebhookState>>,
+    Query(params): Query<OAuthCallbackQuery>,
+) -> (StatusCode, axum::response::Html<String>) {
+    if let Some(err) = params.error {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::response::Html(format!(
+                "<html><body><h2>OAuth error: {err}</h2></body></html>"
+            )),
+        );
+    }
+    let code = match params.code {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::response::Html(
+                    "<html><body><h2>Missing code parameter.</h2></body></html>".to_string(),
+                ),
+            );
+        }
+    };
+
+    let verifier = match state.sqlite.get_config("oauth_pkce_verifier") {
+        Ok(Some(v)) if !v.is_empty() => v,
+        _ => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::response::Html(
+                    "<html><body><h2>No PKCE verifier found. Run 'trusty auth' first.</h2></body></html>"
+                        .to_string(),
+                ),
+            );
+        }
+    };
+
+    let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("code", code.as_str()),
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            (
+                "redirect_uri",
+                "https://izzie.ngrok.dev/api/auth/google/callback",
+            ),
+            ("grant_type", "authorization_code"),
+            ("code_verifier", verifier.as_str()),
+        ])
+        .send()
+        .await;
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Token exchange request failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::response::Html(format!(
+                    "<html><body><h2>Token exchange failed: {e}</h2></body></html>"
+                )),
+            );
+        }
+    };
+
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Token response parse failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::response::Html(format!(
+                    "<html><body><h2>Failed to parse token response: {e}</h2></body></html>"
+                )),
+            );
+        }
+    };
+
+    let access_token = match body["access_token"].as_str() {
+        Some(t) => t.to_string(),
+        None => {
+            let msg = body
+                .get("error_description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            error!("Token exchange error: {msg}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::response::Html(format!(
+                    "<html><body><h2>Token exchange error: {msg}</h2></body></html>"
+                )),
+            );
+        }
+    };
+    let refresh_token = body["refresh_token"].as_str().unwrap_or("").to_string();
+
+    if let Err(e) = state
+        .sqlite
+        .set_config("google_access_token", &access_token)
+    {
+        error!("Failed to store access token: {e}");
+    }
+    if !refresh_token.is_empty() {
+        if let Err(e) = state
+            .sqlite
+            .set_config("google_refresh_token", &refresh_token)
+        {
+            error!("Failed to store refresh token: {e}");
+        }
+    }
+    // Clear the one-time verifier.
+    let _ = state.sqlite.set_config("oauth_pkce_verifier", "");
+
+    info!("Google OAuth callback completed successfully");
+    (
+        StatusCode::OK,
+        axum::response::Html(
+            "<html><body><h2>Authenticated!</h2><p>Trusty Izzie is now connected to Gmail. You can close this tab.</p></body></html>"
+                .to_string(),
+        ),
+    )
 }
 
 async fn webhook_handler(
@@ -262,6 +398,7 @@ async fn run_webhook(
     port: u16,
     engine: Arc<ChatEngine>,
     allowed_users: Vec<i64>,
+    sqlite: Arc<SqliteStore>,
 ) -> Result<()> {
     // Register webhook with Telegram.
     api_set_webhook(&bot_token, &webhook_url).await?;
@@ -270,11 +407,13 @@ async fn run_webhook(
         engine,
         allowed_users,
         bot_token,
+        sqlite,
     });
 
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/webhook/telegram", post(webhook_handler))
+        .route("/api/auth/google/callback", get(oauth_callback_handler))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{port}");
@@ -427,7 +566,7 @@ async fn main() -> Result<()> {
                         "Webhook URL required. Use --webhook-url <URL> or --poll for long-polling."
                     )
                 })?;
-                run_webhook(token, url, port, engine, allowed).await?;
+                run_webhook(token, url, port, engine, allowed, Arc::clone(&sqlite)).await?;
             }
         }
 
