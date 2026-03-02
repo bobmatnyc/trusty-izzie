@@ -8,5 +8,6 @@ pub mod engine;
 pub mod session;
 pub mod tools;
 
+pub use context::ContextAssembler;
 pub use engine::ChatEngine;
 pub use session::SessionManager;

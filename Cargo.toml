@@ -13,6 +13,7 @@ members = [
     "crates/trusty-api",
     "crates/trusty-cli",
     "crates/trusty-tui",
+    "crates/trusty-telegram",
 ]
 
 [workspace.package]
@@ -99,6 +100,9 @@ strsim = "0.11"
 
 # IPC
 interprocess = "2"
+
+# Telegram bot
+teloxide = { version = "0.13", features = ["macros"] }
 
 [profile.release]
 opt-level = 3

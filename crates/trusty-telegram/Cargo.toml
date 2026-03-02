@@ -1,0 +1,26 @@
+[package]
+name = "trusty-telegram"
+description = "Telegram bot interface for trusty-izzie"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "trusty-telegram"
+path = "src/main.rs"
+
+[dependencies]
+trusty-models = { path = "../trusty-models" }
+trusty-core = { path = "../trusty-core" }
+trusty-store = { path = "../trusty-store" }
+trusty-chat = { path = "../trusty-chat" }
+
+teloxide = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dotenvy = { workspace = true }
+clap = { workspace = true }

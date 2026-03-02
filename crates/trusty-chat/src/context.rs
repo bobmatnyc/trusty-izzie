@@ -1,31 +1,51 @@
 //! RAG context assembly for chat completions.
 
 use anyhow::Result;
+use std::sync::Arc;
 
+use trusty_memory::MemoryRecaller;
 use trusty_models::chat::ChatContext;
 
 /// Assembles the retrieval-augmented context for a chat turn.
-#[allow(dead_code)]
 pub struct ContextAssembler {
+    memory_recaller: Option<Arc<MemoryRecaller>>,
     memory_limit: usize,
+    /// Reserved for future entity search; not yet wired to a store.
+    #[allow(dead_code)]
     entity_limit: usize,
 }
 
 impl ContextAssembler {
-    /// Construct with limits from the chat config.
+    /// Construct with limits from the chat config. No memory recaller attached.
     pub fn new(memory_limit: usize, entity_limit: usize) -> Self {
         Self {
+            memory_recaller: None,
             memory_limit,
             entity_limit,
         }
     }
 
+    /// Attach a `MemoryRecaller` for live memory retrieval.
+    pub fn with_memory_recaller(mut self, r: Arc<MemoryRecaller>) -> Self {
+        self.memory_recaller = Some(r);
+        self
+    }
+
     /// Build a `ChatContext` from the user's query.
     ///
-    /// Retrieves relevant memories and entities and bundles them for injection
-    /// into the system prompt.
-    pub async fn assemble(&self, _query: &str, _user_id: &str) -> Result<ChatContext> {
-        todo!("retrieve memories via MemoryRecaller and entities via GraphStore")
+    /// If a `MemoryRecaller` is configured, retrieves relevant memories.
+    /// Entity search is stubbed — returns empty until daemon wiring is complete.
+    pub async fn assemble(&self, query: &str, _user_id: &str) -> Result<ChatContext> {
+        let relevant_memories = match &self.memory_recaller {
+            Some(recaller) => recaller.recall(query, self.memory_limit).await?,
+            None => vec![],
+        };
+
+        Ok(ChatContext {
+            relevant_memories,
+            relevant_entities: vec![],
+            session_summary: None,
+        })
     }
 
     /// Render a `ChatContext` into a markdown-formatted system prompt section.
