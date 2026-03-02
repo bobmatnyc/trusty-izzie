@@ -7437,7 +7437,7 @@ checksum = "dd69c5aa8f924c7519d6372789a74eac5b94fb0f8fcf0d4a97eb0bfc3e785f39"
 
 [[package]]
 name = "trusty-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -7458,7 +7458,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-chat"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7479,7 +7479,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7502,7 +7502,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "config",
@@ -7517,7 +7517,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7538,7 +7538,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-email"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7558,7 +7558,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-embeddings"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "fastembed",
@@ -7573,7 +7573,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-extractor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7592,7 +7592,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-memory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7610,7 +7610,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-migrate"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -7629,7 +7629,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-models"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -7640,7 +7640,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arrow",
@@ -7665,7 +7665,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-telegram"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7694,7 +7694,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
