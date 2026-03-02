@@ -331,6 +331,23 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// List the N most recently active chat sessions.
+    /// Returns `Vec<(id, title, last_active_at)>`.
+    pub fn list_recent_sessions(&self, limit: usize) -> Result<Vec<(String, Option<String>, i64)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, last_active_at FROM chat_sessions ORDER BY last_active_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        let mut sessions = Vec::new();
+        for row in rows {
+            sessions.push(row?);
+        }
+        Ok(sessions)
+    }
+
     /// Get all messages for a session, ordered by created_at ASC.
     /// Returns `Vec<(id, role, content, created_at)>`.
     pub fn get_messages(&self, session_id: &str) -> Result<Vec<(String, String, String, i64)>> {

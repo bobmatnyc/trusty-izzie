@@ -202,6 +202,69 @@ impl GraphStore {
         Ok(entities)
     }
 
+    /// List entities, optionally filtered by type string (e.g. "Person", "Company").
+    /// Returns up to `limit` entities ordered by label then name.
+    pub fn list_entities(
+        &self,
+        entity_type_filter: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Entity>> {
+        let conn = kuzu::Connection::new(&self.db)?;
+        let mut entities = Vec::new();
+
+        let labels: Vec<&str> = match entity_type_filter {
+            Some(t) => vec![t],
+            None => vec!["Person", "Company", "Project", "Tool", "Topic", "Location"],
+        };
+
+        for label in &labels {
+            if entities.len() >= limit {
+                break;
+            }
+            let remaining = limit - entities.len();
+            let cypher = format!(
+                "MATCH (n:{label}) RETURN n.id, n.name, n.confidence, n.first_seen, n.last_seen ORDER BY n.name LIMIT {remaining};"
+            );
+            let mut result = match conn.query(&cypher) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for row in &mut result {
+                if entities.len() >= limit {
+                    break;
+                }
+                let id_str = value_to_string(&row[0]);
+                let id = match uuid::Uuid::parse_str(&id_str) {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                let name = value_to_string(&row[1]);
+                let confidence = value_to_f64(&row[2]) as f32;
+                let first_seen = parse_dt(value_to_string(&row[3]).as_str());
+                let last_seen = parse_dt(value_to_string(&row[4]).as_str());
+                let entity_type = entity_type_from_label(label);
+
+                entities.push(Entity {
+                    id,
+                    user_id: String::new(),
+                    entity_type,
+                    value: name.clone(),
+                    normalized: name.to_lowercase(),
+                    confidence,
+                    source: "graph".to_string(),
+                    source_id: None,
+                    context: None,
+                    aliases: vec![],
+                    occurrence_count: 1,
+                    first_seen,
+                    last_seen,
+                    created_at: first_seen,
+                });
+            }
+        }
+        Ok(entities)
+    }
+
     /// Get all outgoing relationships for an entity (matched by id across all node types).
     pub fn get_entity_relationships(&self, entity_id: &str) -> Result<Vec<Relationship>> {
         let conn = kuzu::Connection::new(&self.db)?;

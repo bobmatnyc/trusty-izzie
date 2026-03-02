@@ -342,6 +342,38 @@ impl LanceStore {
         Ok(None)
     }
 
+    /// List memories by scanning the table (no ANN), sorted by strength desc.
+    /// Returns up to `limit` Memory records.
+    pub async fn list_memories(&self, limit: usize) -> Result<Vec<Memory>> {
+        let table = self.connection.open_table("memories").execute().await?;
+
+        // Full scan: filter archived=false, select all columns, limit result set.
+        let stream = table
+            .query()
+            .only_if("archived = false")
+            .limit(limit)
+            .execute()
+            .await?;
+
+        let batches: Vec<RecordBatch> = collect_stream(stream).await?;
+        let mut memories = Vec::new();
+        for batch in &batches {
+            for row in 0..batch.num_rows() {
+                if let Ok(Some(m)) = memory_from_batch(batch, row) {
+                    memories.push(m);
+                }
+            }
+        }
+        // Sort by importance desc as a proxy for strength (strength col not exposed in Memory)
+        memories.sort_by(|a, b| {
+            b.importance
+                .partial_cmp(&a.importance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        memories.truncate(limit);
+        Ok(memories)
+    }
+
     /// Delete a memory by ID.
     pub async fn delete_memory(&self, id: &str) -> Result<()> {
         let table = self.connection.open_table("memories").execute().await?;
