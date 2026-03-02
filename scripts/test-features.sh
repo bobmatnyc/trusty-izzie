@@ -30,9 +30,9 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
-pass() { echo -e "  ${GREEN}✓${RESET} $1"; (( PASS++ )); }
-fail() { echo -e "  ${RED}✗${RESET} $1: $2"; (( FAIL++ )); }
-skip() { echo -e "  ${YELLOW}○${RESET} $1 (skipped)"; (( SKIP++ )); }
+pass() { echo -e "  ${GREEN}✓${RESET} $1"; PASS=$((PASS + 1)); }
+fail() { echo -e "  ${RED}✗${RESET} $1: $2"; FAIL=$((FAIL + 1)); }
+skip() { echo -e "  ${YELLOW}○${RESET} $1 (skipped)"; SKIP=$((SKIP + 1)); }
 
 run() {
     # run <label> <expected-exit-code> <cmd...>
