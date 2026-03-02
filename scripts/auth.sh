@@ -22,6 +22,6 @@ if [[ -f "$PROJECT_DIR/.env" ]]; then
 fi
 
 echo "▶ Starting Google OAuth2 login…"
-echo "  A browser window will open — log in with bobmatnyc@gmail.com"
+echo "  A browser window will open — log in with bob@matsuoka.com"
 echo ""
 exec "$CLI_BIN" auth "$@"
