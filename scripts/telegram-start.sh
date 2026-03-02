@@ -39,7 +39,7 @@ echo "  Log → $TG_LOG_FILE"
 
 nohup "$TG_BIN" start \
     --webhook-url https://izzie.ngrok.dev/webhook/telegram \
-    --port 3457 \
+    --port 3456 \
     >> "$TG_LOG_FILE" 2>&1 &
 TG_PID=$!
 echo "$TG_PID" > "$TG_PID_FILE"
