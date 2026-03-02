@@ -33,7 +33,10 @@ impl GoogleAuthClient {
 
     /// Generate the Google consent URL the user must visit to grant access.
     pub fn authorization_url(&self) -> String {
-        let scope = "https://www.googleapis.com/auth/gmail.readonly \
+        let scope = "https://mail.google.com/ \
+                     https://www.googleapis.com/auth/calendar \
+                     https://www.googleapis.com/auth/tasks \
+                     https://www.googleapis.com/auth/drive.readonly \
                      https://www.googleapis.com/auth/userinfo.email";
         // Use reqwest::Url to get correct percent-encoding without new deps.
         let mut url = reqwest::Url::parse("https://accounts.google.com/o/oauth2/v2/auth")
@@ -140,7 +143,10 @@ impl GoogleAuthClient {
     ///
     /// Callers must pass the `code_challenge` produced by [`generate_pkce_pair`].
     pub fn authorization_url_pkce(&self, code_challenge: &str) -> String {
-        let scope = "https://www.googleapis.com/auth/gmail.readonly \
+        let scope = "https://mail.google.com/ \
+                     https://www.googleapis.com/auth/calendar \
+                     https://www.googleapis.com/auth/tasks \
+                     https://www.googleapis.com/auth/drive.readonly \
                      https://www.googleapis.com/auth/userinfo.email";
         let mut url = reqwest::Url::parse("https://accounts.google.com/o/oauth2/v2/auth")
             .expect("static base URL is valid");
@@ -229,10 +235,7 @@ mod tests {
             "missing access_type=offline"
         );
         assert!(url.contains("prompt=consent"), "missing prompt=consent");
-        assert!(
-            url.contains("gmail.readonly"),
-            "missing gmail.readonly scope"
-        );
+        assert!(url.contains("mail.google.com"), "missing full gmail scope");
         assert!(
             url.contains("userinfo.email"),
             "missing userinfo.email scope"
