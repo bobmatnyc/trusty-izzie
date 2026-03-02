@@ -384,9 +384,13 @@ async fn main() -> Result<()> {
             port,
             poll,
         } => {
-            let token = std::env::var("TELEGRAM_BOT_TOKEN")
+            // Prefer the explicitly paired token in SQLite over ambient env vars,
+            // so that AI Commander's TELEGRAM_BOT_TOKEN doesn't bleed in.
+            let token = sqlite
+                .get_config("telegram_bot_token")
                 .ok()
-                .or_else(|| sqlite.get_config("telegram_bot_token").ok().flatten())
+                .flatten()
+                .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())
                 .ok_or_else(|| {
                     anyhow!("No bot token found. Run: trusty-telegram pair --token <TOKEN>")
                 })?;
@@ -428,9 +432,12 @@ async fn main() -> Result<()> {
         }
 
         Command::Webhook { action } => {
-            let token = std::env::var("TELEGRAM_BOT_TOKEN")
+            // Prefer the explicitly paired token in SQLite over ambient env vars.
+            let token = sqlite
+                .get_config("telegram_bot_token")
                 .ok()
-                .or_else(|| sqlite.get_config("telegram_bot_token").ok().flatten())
+                .flatten()
+                .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())
                 .ok_or_else(|| {
                     anyhow!("No bot token found. Run: trusty-telegram pair --token <TOKEN>")
                 })?;
