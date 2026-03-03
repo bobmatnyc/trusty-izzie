@@ -10,6 +10,7 @@ pub enum EventType {
     EntityExtraction,
     MemoryDecay,
     CalendarRefresh,
+    NeedsReauth,
 }
 
 impl EventType {
@@ -20,11 +21,13 @@ impl EventType {
             EventType::EntityExtraction => "entity_extraction",
             EventType::MemoryDecay => "memory_decay",
             EventType::CalendarRefresh => "calendar_refresh",
+            EventType::NeedsReauth => "needs_reauth",
         }
     }
 
     pub fn default_priority(&self) -> i64 {
         match self {
+            EventType::NeedsReauth => 1,
             EventType::Reminder => 2,
             EventType::EmailSync => 4,
             EventType::EntityExtraction => 5,
@@ -35,6 +38,7 @@ impl EventType {
 
     pub fn default_max_retries(&self) -> i64 {
         match self {
+            EventType::NeedsReauth => 1,
             EventType::Reminder => 1,
             EventType::EmailSync => 3,
             EventType::EntityExtraction => 5,
@@ -53,6 +57,7 @@ impl std::str::FromStr for EventType {
             "entity_extraction" => Ok(EventType::EntityExtraction),
             "memory_decay" => Ok(EventType::MemoryDecay),
             "calendar_refresh" => Ok(EventType::CalendarRefresh),
+            "needs_reauth" => Ok(EventType::NeedsReauth),
             _ => Err(format!("unknown event type: {}", s)),
         }
     }
@@ -78,6 +83,10 @@ pub enum EventPayload {
     },
     CalendarRefresh {
         lookahead_days: u32,
+    },
+    NeedsReauth {
+        /// Reason code: "no_token" | "token_expired" | "auth_error"
+        reason: String,
     },
 }
 

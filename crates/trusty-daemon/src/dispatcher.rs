@@ -6,7 +6,7 @@ use trusty_store::Store;
 
 use crate::handlers::{
     CalendarRefreshHandler, DispatchResult, EmailSyncHandler, EntityExtractionHandler,
-    EventHandler, MemoryDecayHandler, ReminderHandler,
+    EventHandler, MemoryDecayHandler, NeedsReauthHandler, ReminderHandler,
 };
 
 pub struct EventDispatcher {
@@ -35,6 +35,7 @@ impl EventDispatcher {
 
     fn all_handlers() -> Vec<Box<dyn EventHandler>> {
         vec![
+            Box::new(NeedsReauthHandler),
             Box::new(ReminderHandler),
             Box::new(EmailSyncHandler),
             Box::new(EntityExtractionHandler),

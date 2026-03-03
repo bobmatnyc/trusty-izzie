@@ -21,6 +21,36 @@ impl EventHandler for EmailSyncHandler {
         store: &Arc<Store>,
     ) -> Result<DispatchResult, TrustyError> {
         info!("EmailSync tick (stub) — full implementation pending trusty-email");
+
+        // Check for a Google access token before attempting sync.
+        let sqlite_check = store.sqlite.clone();
+        let has_token =
+            tokio::task::spawn_blocking(move || sqlite_check.get_config("google_access_token"))
+                .await
+                .map_err(|e| TrustyError::Storage(e.to_string()))?
+                .map_err(|e| TrustyError::Storage(e.to_string()))?
+                .map(|t| !t.is_empty())
+                .unwrap_or(false);
+
+        if !has_token {
+            info!("EmailSync: no google_access_token found, triggering NeedsReauth");
+            return Ok(DispatchResult::Chain(vec![
+                (
+                    EventType::NeedsReauth,
+                    EventPayload::NeedsReauth {
+                        reason: "no_token".to_string(),
+                    },
+                    chrono::Utc::now().timestamp(),
+                ),
+                // Retry EmailSync in 10 minutes (after user completes auth).
+                (
+                    EventType::EmailSync,
+                    EventPayload::EmailSync { force: false },
+                    chrono::Utc::now().timestamp() + 600,
+                ),
+            ]));
+        }
+
         // TODO: call trusty_email::sync() when implemented
 
         // Re-schedule self at the configured interval (default: 5 minutes).

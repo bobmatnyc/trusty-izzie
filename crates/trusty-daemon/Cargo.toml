@@ -23,6 +23,7 @@ trusty-memory = { path = "../trusty-memory" }
 trusty-store = { path = "../trusty-store" }
 
 interprocess = { workspace = true }
+reqwest = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

@@ -162,6 +162,11 @@ impl ChatEngine {
                 message_ids: vec![],
                 source_event_id: None,
             },
+            EventType::NeedsReauth => {
+                return Ok(
+                    "NeedsReauth is a system event and cannot be scheduled from chat.".to_string(),
+                )
+            }
         };
 
         let id = self.sqlite_ref()?.enqueue_event(

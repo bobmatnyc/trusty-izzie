@@ -35,6 +35,7 @@ use teloxide::types::ChatAction;
 use tracing::{error, info, warn};
 
 use trusty_chat::{context::ContextAssembler, engine::ChatEngine, session::SessionManager};
+use trusty_email::auth::{generate_pkce_pair, GoogleAuthClient};
 use trusty_extractor::{EntityExtractor, ExtractorConfig, UserContext};
 use trusty_store::sqlite::SqliteStore;
 use trusty_store::Store;
@@ -353,11 +354,29 @@ async fn oauth_callback_handler(
     // Clear the one-time verifier.
     let _ = state.sqlite.set_config("oauth_pkce_verifier", "");
 
+    // Notify the user in Telegram if we have a pending chat_id.
+    if let Ok(Some(s)) = state.sqlite.get_config("oauth_pending_chat_id") {
+        if let Ok(cid) = s.parse::<i64>() {
+            if cid != 0 {
+                let tok = state.bot_token.clone();
+                tokio::spawn(async move {
+                    let _ = send_reply(
+                        &tok,
+                        cid,
+                        "✅ Gmail connected! Trusty Izzie will now sync your sent mail.",
+                    )
+                    .await;
+                });
+                let _ = state.sqlite.set_config("oauth_pending_chat_id", "0");
+            }
+        }
+    }
+
     info!("Google OAuth callback completed successfully");
     (
         StatusCode::OK,
         axum::response::Html(
-            "<html><body><h2>Authenticated!</h2><p>Trusty Izzie is now connected to Gmail. You can close this tab.</p></body></html>"
+            "<html><body><h2>Authenticated!</h2><p>Trusty Izzie is now connected to Gmail.</p><p>A confirmation was sent to your Telegram. You can close this tab.</p></body></html>"
                 .to_string(),
         ),
     )
@@ -385,6 +404,11 @@ async fn webhook_handler(
             return StatusCode::OK;
         }
     }
+
+    // Persist chat_id for proactive daemon notifications (e.g., NeedsReauth).
+    let _ = state
+        .sqlite
+        .set_config("telegram_primary_chat_id", &chat_id.to_string());
 
     // Handle document messages.
     if let Some(doc) = msg.document.clone() {
@@ -442,6 +466,34 @@ async fn webhook_handler(
         Some(t) => t,
         None => return StatusCode::OK,
     };
+
+    // Handle /auth command — generate PKCE link and send to user.
+    if text.trim() == "/auth" || text.trim().starts_with("/auth ") {
+        let (verifier, challenge) = generate_pkce_pair();
+        let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+        let ngrok =
+            std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
+        let redirect_uri = format!("https://{ngrok}/api/auth/google/callback");
+        let auth_client = GoogleAuthClient::new(client_id, client_secret, redirect_uri);
+        let auth_url = auth_client.authorization_url_pkce(&challenge);
+        let _ = state.sqlite.set_config("oauth_pkce_verifier", &verifier);
+        let _ = state
+            .sqlite
+            .set_config("oauth_pending_chat_id", &chat_id.to_string());
+        let token = state.bot_token.clone();
+        tokio::spawn(async move {
+            let _ = send_reply(
+                &token,
+                chat_id,
+                &format!(
+                    "🔐 Authenticate trusty-izzie with Gmail:\n\n{auth_url}\n\nLink expires in ~10 minutes."
+                ),
+            )
+            .await;
+        });
+        return StatusCode::OK;
+    }
 
     // Process chat asynchronously — respond 200 immediately to Telegram.
     let engine = Arc::clone(&state.engine);
