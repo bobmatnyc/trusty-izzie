@@ -337,7 +337,7 @@ async fn send_reply(token: &str, chat_id: i64, text: &str) -> Result<()> {
 
 /// Send a "progress" placeholder message; returns its message_id for later editing.
 async fn send_progress_message(token: &str, chat_id: i64, reply_to: i64) -> i64 {
-    send_message(token, chat_id, "⏳", Some(reply_to), "")
+    send_message(token, chat_id, "…", Some(reply_to), "")
         .await
         .unwrap_or(0)
 }

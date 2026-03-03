@@ -6,6 +6,7 @@ use trusty_store::Store;
 
 pub mod agent_run;
 pub mod calendar_refresh;
+pub mod contacts_sync;
 pub mod email_sync;
 pub mod entity_extraction;
 pub mod memory_decay;
@@ -14,6 +15,7 @@ pub mod reminder;
 
 pub use agent_run::AgentRunHandler;
 pub use calendar_refresh::CalendarRefreshHandler;
+pub use contacts_sync::ContactsSyncHandler;
 pub use email_sync::EmailSyncHandler;
 pub use entity_extraction::EntityExtractionHandler;
 pub use memory_decay::MemoryDecayHandler;

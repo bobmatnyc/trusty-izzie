@@ -143,6 +143,7 @@ impl ChatEngine {
             ToolName::ListAccounts => self.tool_list_accounts(),
             ToolName::AddAccount => self.tool_add_account(),
             ToolName::RemoveAccount => self.tool_remove_account(input),
+            ToolName::SyncContacts => self.tool_sync_contacts(),
             _ => Ok("Tool not yet implemented.".to_string()),
         }
     }
@@ -194,6 +195,7 @@ impl ChatEngine {
                 task_description: input["task_description"].as_str().unwrap_or("").to_string(),
                 context: input["context"].as_str().map(|s| s.to_string()),
             },
+            EventType::ContactsSync => EventPayload::ContactsSync { force: false },
         };
 
         let id = self.sqlite_ref()?.enqueue_event(
@@ -439,6 +441,21 @@ impl ChatEngine {
         (model, max_runtime_mins, description, body)
     }
 
+    fn tool_sync_contacts(&self) -> Result<String> {
+        let sqlite = self.sqlite_ref()?;
+        let now = chrono::Utc::now().timestamp();
+        sqlite.enqueue_event(
+            &EventType::ContactsSync,
+            &EventPayload::ContactsSync { force: false },
+            now,
+            6,
+            2,
+            "chat",
+            None,
+        )?;
+        Ok("macOS Contacts sync queued. I'll process your AddressBook and update my knowledge of your contacts shortly. Note: the first run will prompt for Contacts permission if not already granted.".to_string())
+    }
+
     fn tool_list_accounts(&self) -> Result<String> {
         let sqlite = self.sqlite_ref()?;
         let accounts = sqlite.list_accounts()?;
@@ -650,6 +667,9 @@ I can check my own service status with `check_service_status`, report my version
 
 ## Email Accounts
 I learn from email sent from multiple Google accounts. Use `list_accounts` to see all registered accounts, `add_account` to add a new Google account (I'll return an OAuth URL to visit), or `remove_account` to stop syncing a secondary account.
+
+## What I Can Do
+- **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 
 CRITICAL OUTPUT FORMAT: Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
 

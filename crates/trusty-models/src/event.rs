@@ -12,6 +12,7 @@ pub enum EventType {
     CalendarRefresh,
     NeedsReauth,
     AgentRun,
+    ContactsSync,
 }
 
 impl EventType {
@@ -24,6 +25,7 @@ impl EventType {
             EventType::CalendarRefresh => "calendar_refresh",
             EventType::NeedsReauth => "needs_reauth",
             EventType::AgentRun => "agent_run",
+            EventType::ContactsSync => "contacts_sync",
         }
     }
 
@@ -35,6 +37,7 @@ impl EventType {
             EventType::EmailSync => 4,
             EventType::EntityExtraction => 5,
             EventType::CalendarRefresh => 6,
+            EventType::ContactsSync => 6,
             EventType::MemoryDecay => 8,
         }
     }
@@ -48,6 +51,7 @@ impl EventType {
             EventType::EntityExtraction => 5,
             EventType::CalendarRefresh => 3,
             EventType::MemoryDecay => 2,
+            EventType::ContactsSync => 2,
         }
     }
 }
@@ -63,6 +67,7 @@ impl std::str::FromStr for EventType {
             "calendar_refresh" => Ok(EventType::CalendarRefresh),
             "needs_reauth" => Ok(EventType::NeedsReauth),
             "agent_run" => Ok(EventType::AgentRun),
+            "contacts_sync" => Ok(EventType::ContactsSync),
             _ => Err(format!("unknown event type: {}", s)),
         }
     }
@@ -99,6 +104,9 @@ pub enum EventPayload {
         task_description: String,
         /// Optional extra context injected into the agent prompt
         context: Option<String>,
+    },
+    ContactsSync {
+        force: bool,
     },
 }
 

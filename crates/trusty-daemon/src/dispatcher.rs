@@ -7,7 +7,7 @@ use trusty_store::Store;
 use std::path::PathBuf;
 
 use crate::handlers::{
-    AgentRunHandler, CalendarRefreshHandler, DispatchResult, EmailSyncHandler,
+    AgentRunHandler, CalendarRefreshHandler, ContactsSyncHandler, DispatchResult, EmailSyncHandler,
     EntityExtractionHandler, EventHandler, MemoryDecayHandler, NeedsReauthHandler, ReminderHandler,
 };
 
@@ -58,6 +58,7 @@ impl EventDispatcher {
             Box::new(NeedsReauthHandler),
             Box::new(ReminderHandler),
             Box::new(EmailSyncHandler),
+            Box::new(ContactsSyncHandler),
             Box::new(EntityExtractionHandler),
             Box::new(MemoryDecayHandler),
             Box::new(CalendarRefreshHandler),

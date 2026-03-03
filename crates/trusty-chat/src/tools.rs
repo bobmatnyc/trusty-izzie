@@ -49,6 +49,8 @@ pub enum ToolName {
     AddAccount,
     /// Deactivate a secondary Google account (stops syncing it).
     RemoveAccount,
+    /// Queue a macOS Contacts (AddressBook) sync.
+    SyncContacts,
 }
 
 /// A parsed tool call request from the LLM.

@@ -148,6 +148,12 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
             EventPayload::CalendarRefresh { lookahead_days: 7 },
             now,
         )?;
+        seed_if_absent(
+            sqlite,
+            EventType::ContactsSync,
+            EventPayload::ContactsSync { force: false },
+            now,
+        )?;
     }
 
     let agents_dir = std::path::PathBuf::from(&config.agents.agents_dir);
