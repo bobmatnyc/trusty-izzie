@@ -51,6 +51,8 @@ pub enum ToolName {
     RemoveAccount,
     /// Queue a macOS Contacts (AddressBook) sync.
     SyncContacts,
+    /// Execute a bash shell command and return stdout/stderr.
+    ExecuteShellCommand,
 }
 
 /// A parsed tool call request from the LLM.

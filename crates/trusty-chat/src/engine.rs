@@ -144,6 +144,7 @@ impl ChatEngine {
             ToolName::AddAccount => self.tool_add_account(),
             ToolName::RemoveAccount => self.tool_remove_account(input),
             ToolName::SyncContacts => self.tool_sync_contacts(),
+            ToolName::ExecuteShellCommand => self.tool_execute_shell_command(input),
             _ => Ok("Tool not yet implemented.".to_string()),
         }
     }
@@ -522,6 +523,45 @@ impl ChatEngine {
         }
     }
 
+    fn tool_execute_shell_command(&self, input: &serde_json::Value) -> Result<String> {
+        let command = input["command"].as_str().unwrap_or("").trim();
+        if command.is_empty() {
+            return Ok("Error: 'command' field is required".to_string());
+        }
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn command: {e}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let exit_code = output.status.code().unwrap_or(-1);
+
+        let mut result = String::new();
+        if !stdout.is_empty() {
+            result.push_str(&stdout);
+        }
+        if !stderr.is_empty() {
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str("[stderr] ");
+            result.push_str(&stderr);
+        }
+        if result.is_empty() {
+            result = format!("(exit code: {exit_code})");
+        }
+
+        if result.len() > 8000 {
+            result.truncate(8000);
+            result.push_str("\n...(truncated)");
+        }
+
+        Ok(result)
+    }
+
     /// Process a single user turn, returning the assistant's reply.
     ///
     /// The caller is responsible for loading and saving the session.
@@ -670,6 +710,31 @@ I learn from email sent from multiple Google accounts. Use `list_accounts` to se
 
 ## What I Can Do
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
+
+## Available Tools (complete list)
+- `check_service_status` — report running status of all trusty-izzie launchd services
+- `get_version` — return the current binary version
+- `submit_github_issue` — file a GitHub issue via the `gh` CLI
+- `schedule_event` — schedule a background task (email_sync, contacts_sync, memory_decay, reminder, agent_run, etc.)
+- `cancel_event` — cancel a pending scheduled event by ID
+- `list_events` — list scheduled or recent events, optionally filtered by status
+- `run_agent` — enqueue a background research agent task
+- `list_agents` — list available agent definitions
+- `get_agent_task` — get the status and output of an agent task by ID
+- `list_accounts` — list all registered Google accounts
+- `add_account` — add a Google account (returns OAuth URL; account registered after user consents)
+- `remove_account` — deactivate a secondary Google account (stops syncing it)
+- `sync_contacts` — queue a macOS AddressBook contacts sync
+- `execute_shell_command` — run a bash shell command on this Mac and return stdout/stderr
+
+I do NOT have `read_file`, `write_file`, or `list_directory` tools. To access the file system, use `execute_shell_command` with commands like `ls`, `cat`, etc.
+
+## Shell Access
+I can run shell commands on your Mac via `execute_shell_command`. This lets me:
+- Read/list files: `ls ~/Downloads`, `cat ~/some/file.txt`
+- Run scripts: any bash command
+- Check system state: `ps aux | grep something`, `df -h`, etc.
+Use this for any scripting or file system tasks.
 
 CRITICAL OUTPUT FORMAT: Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
 
