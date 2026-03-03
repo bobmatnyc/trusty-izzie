@@ -150,7 +150,14 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
         )?;
     }
 
-    let dispatcher = EventDispatcher::new(store);
+    let agents_dir = std::path::PathBuf::from(&config.agents.agents_dir);
+    let openrouter_api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+    let dispatcher = EventDispatcher::new_with_agents(
+        store,
+        agents_dir,
+        config.openrouter.base_url.clone(),
+        openrouter_api_key,
+    );
     let ipc_server = IpcServer::new(config.daemon.ipc_socket.clone());
     let daemon_loop = DaemonLoop::new();
 

@@ -1,11 +1,24 @@
 //! trusty-api — REST API server for trusty-izzie.
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use anyhow::Result;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
 use trusty_api::{routes::build_router, AppState};
 use trusty_core::{init_logging, load_config};
+use trusty_store::SqliteStore;
+
+fn expand_data_dir(raw: &str) -> PathBuf {
+    if raw.starts_with('~') {
+        let home = std::env::var("HOME").unwrap_or_default();
+        PathBuf::from(raw.replacen('~', &home, 1))
+    } else {
+        PathBuf::from(raw)
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,7 +30,11 @@ async fn main() -> Result<()> {
     let bind_addr = format!("{}:{}", config.api.host, config.api.port);
     info!(address = %bind_addr, "starting trusty-api");
 
-    let state = AppState::new(config);
+    let data_dir = expand_data_dir(&config.storage.data_dir);
+    let sqlite_path = data_dir.join(&config.storage.sqlite_path);
+    let sqlite = Arc::new(SqliteStore::open(&sqlite_path)?);
+
+    let state = AppState::new(config, sqlite);
 
     let app = build_router(state)
         .layer(TraceLayer::new_for_http())

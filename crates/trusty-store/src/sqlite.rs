@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use trusty_models::email::GmailHistoryCursor;
-use trusty_models::{EventPayload, EventStatus, EventType, QueuedEvent};
+use trusty_models::{AgentTask, EventPayload, EventStatus, EventType, QueuedEvent};
 
 /// Handle to the SQLite relational database.
 ///
@@ -118,6 +118,21 @@ impl SqliteStore {
                 ON event_queue(status, scheduled_at ASC)
                 WHERE status IN ('pending','failed');
             CREATE INDEX IF NOT EXISTS idx_eq_type ON event_queue(event_type, status);
+
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id               TEXT PRIMARY KEY,
+                agent_name       TEXT NOT NULL,
+                task_description TEXT NOT NULL,
+                status           TEXT NOT NULL DEFAULT 'pending',
+                model            TEXT,
+                output           TEXT,
+                error            TEXT,
+                created_at       INTEGER NOT NULL,
+                started_at       INTEGER,
+                completed_at     INTEGER,
+                parent_event_id  TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_at_status ON agent_tasks(status, created_at DESC);
             "#,
         )?;
         Ok(())
@@ -548,6 +563,126 @@ impl SqliteStore {
             rusqlite::params![id],
         )?;
         Ok(())
+    }
+
+    // ── Agent tasks ───────────────────────────────────────────────────────────
+
+    /// Insert a new agent task in `pending` status.
+    pub fn create_agent_task(
+        &self,
+        id: &str,
+        agent_name: &str,
+        task_description: &str,
+        model: Option<&str>,
+        parent_event_id: Option<&str>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO agent_tasks (id, agent_name, task_description, status, model, created_at, parent_event_id)
+             VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6)",
+            rusqlite::params![id, agent_name, task_description, model, now, parent_event_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update a task's status, output, and error. Also sets `started_at` when
+    /// transitioning to `running` and `completed_at` for all other transitions.
+    pub fn update_agent_task(
+        &self,
+        id: &str,
+        status: &str,
+        output: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE agent_tasks SET status = ?1, output = ?2, error = ?3 WHERE id = ?4",
+            rusqlite::params![status, output, error, id],
+        )?;
+        if status == "running" {
+            conn.execute(
+                "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2",
+                rusqlite::params![now, id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2",
+                rusqlite::params![now, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Retrieve a single agent task by ID.
+    pub fn get_agent_task(&self, id: &str) -> Result<Option<AgentTask>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_name, task_description, status, model, output, error,
+                    created_at, started_at, completed_at, parent_event_id
+             FROM agent_tasks WHERE id = ?1",
+        )?;
+        let result = stmt
+            .query_row(rusqlite::params![id], |row| {
+                Ok(AgentTask {
+                    id: row.get(0)?,
+                    agent_name: row.get(1)?,
+                    task_description: row.get(2)?,
+                    status: row.get(3)?,
+                    model: row.get(4)?,
+                    output: row.get(5)?,
+                    error: row.get(6)?,
+                    created_at: row.get(7)?,
+                    started_at: row.get(8)?,
+                    completed_at: row.get(9)?,
+                    parent_event_id: row.get(10)?,
+                })
+            })
+            .optional()?;
+        Ok(result)
+    }
+
+    /// List agent tasks, optionally filtered by status, newest first.
+    pub fn list_agent_tasks(&self, status: Option<&str>, limit: usize) -> Result<Vec<AgentTask>> {
+        let conn = self.conn.lock().unwrap();
+
+        fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentTask> {
+            Ok(AgentTask {
+                id: row.get(0)?,
+                agent_name: row.get(1)?,
+                task_description: row.get(2)?,
+                status: row.get(3)?,
+                model: row.get(4)?,
+                output: row.get(5)?,
+                error: row.get(6)?,
+                created_at: row.get(7)?,
+                started_at: row.get(8)?,
+                completed_at: row.get(9)?,
+                parent_event_id: row.get(10)?,
+            })
+        }
+
+        const COLS: &str = "id, agent_name, task_description, status, model, output, error,
+                            created_at, started_at, completed_at, parent_event_id";
+
+        let mut tasks = Vec::new();
+        if let Some(s) = status {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {COLS} FROM agent_tasks WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2"
+            ))?;
+            for row in stmt.query_map(rusqlite::params![s, limit as i64], map_row)? {
+                tasks.push(row?);
+            }
+        } else {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {COLS} FROM agent_tasks ORDER BY created_at DESC LIMIT ?1"
+            ))?;
+            for row in stmt.query_map(rusqlite::params![limit as i64], map_row)? {
+                tasks.push(row?);
+            }
+        }
+        Ok(tasks)
     }
 
     /// List events, optionally filtered by status, newest first.

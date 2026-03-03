@@ -3,6 +3,7 @@
 //! This crate is the foundation of the dependency graph. Every other crate may
 //! depend on it; it depends on nothing internal.
 
+pub mod agent;
 pub mod chat;
 pub mod config;
 pub mod email;
@@ -10,6 +11,7 @@ pub mod entity;
 pub mod event;
 pub mod memory;
 
+pub use agent::AgentTask;
 pub use chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
 pub use config::{AppConfig, DaemonConfig, ExtractionConfig, OpenRouterConfig, StorageConfig};
 pub use email::{EmailMessage, GmailHistoryCursor};

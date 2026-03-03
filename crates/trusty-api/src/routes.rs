@@ -47,5 +47,14 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Sync
         .route("/v1/sync", post(handlers::sync::trigger_sync))
+        // Agents
+        .route("/api/agents", get(handlers::agents::list_agents))
+        .route("/api/agents/:name", get(handlers::agents::get_agent))
+        // Tasks
+        .route(
+            "/api/tasks",
+            get(handlers::agents::list_tasks).post(handlers::agents::create_task),
+        )
+        .route("/api/tasks/:id", get(handlers::agents::get_task))
         .with_state(state)
 }

@@ -31,6 +31,18 @@ pub enum ToolName {
     CancelEvent,
     /// List scheduled events, optionally filtered by status.
     ListEvents,
+    /// Report the running status of all trusty-izzie launchd services.
+    CheckServiceStatus,
+    /// Return the compiled version of this binary.
+    GetVersion,
+    /// File a GitHub issue via the `gh` CLI.
+    SubmitGithubIssue,
+    /// List all available agent definitions.
+    ListAgents,
+    /// Enqueue an agent run task.
+    RunAgent,
+    /// Get the status and output of an agent task by ID.
+    GetAgentTask,
 }
 
 /// A parsed tool call request from the LLM.

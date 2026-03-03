@@ -1,5 +1,6 @@
 //! The core chat completion engine.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -25,6 +26,8 @@ pub struct ChatEngine {
     context_assembler: ContextAssembler,
     /// Optional SQLite store for event queue tool dispatch.
     sqlite: Option<Arc<SqliteStore>>,
+    /// Directory containing agent definition Markdown files.
+    agents_dir: PathBuf,
 }
 
 // ── OpenRouter request/response types ────────────────────────────────────────
@@ -106,12 +109,19 @@ impl ChatEngine {
             max_tool_iterations,
             context_assembler,
             sqlite: None,
+            agents_dir: PathBuf::from("docs/agents"),
         }
     }
 
     /// Attach a `SqliteStore` for event-queue tool dispatch.
     pub fn with_sqlite(mut self, sqlite: Arc<SqliteStore>) -> Self {
         self.sqlite = Some(sqlite);
+        self
+    }
+
+    /// Set the agents directory for agent-related tools.
+    pub fn with_agents_dir(mut self, agents_dir: PathBuf) -> Self {
+        self.agents_dir = agents_dir;
         self
     }
 
@@ -124,6 +134,12 @@ impl ChatEngine {
             ToolName::ScheduleEvent => self.tool_schedule_event(input),
             ToolName::CancelEvent => self.tool_cancel_event(input),
             ToolName::ListEvents => self.tool_list_events(input),
+            ToolName::CheckServiceStatus => self.tool_check_service_status(),
+            ToolName::GetVersion => self.tool_get_version(),
+            ToolName::SubmitGithubIssue => self.tool_submit_github_issue(input),
+            ToolName::ListAgents => self.tool_list_agents(),
+            ToolName::RunAgent => self.tool_run_agent(input),
+            ToolName::GetAgentTask => self.tool_get_agent_task(input),
             _ => Ok("Tool not yet implemented.".to_string()),
         }
     }
@@ -167,6 +183,14 @@ impl ChatEngine {
                     "NeedsReauth is a system event and cannot be scheduled from chat.".to_string(),
                 )
             }
+            EventType::AgentRun => EventPayload::AgentRun {
+                agent_name: input["agent_name"]
+                    .as_str()
+                    .unwrap_or("summarizer")
+                    .to_string(),
+                task_description: input["task_description"].as_str().unwrap_or("").to_string(),
+                context: input["context"].as_str().map(|s| s.to_string()),
+            },
         };
 
         let id = self.sqlite_ref()?.enqueue_event(
@@ -209,6 +233,207 @@ impl ChatEngine {
             ));
         }
         Ok(result)
+    }
+
+    fn tool_check_service_status(&self) -> Result<String> {
+        let output = std::process::Command::new("launchctl")
+            .args(["list"])
+            .output()
+            .context("failed to run launchctl")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let services: Vec<serde_json::Value> = stdout
+            .lines()
+            .filter(|line| line.contains("trusty-izzie"))
+            .map(|line| {
+                let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                let pid = parts.first().copied().unwrap_or("-");
+                let last_exit = parts.get(1).copied().unwrap_or("-");
+                let label = parts.get(2).copied().unwrap_or("");
+                let status = if pid == "-" { "stopped" } else { "running" };
+                serde_json::json!({
+                    "service": label,
+                    "pid": pid,
+                    "status": status,
+                    "last_exit": last_exit,
+                })
+            })
+            .collect();
+        if services.is_empty() {
+            return Ok(
+                serde_json::json!([{"status": "no trusty-izzie services found"}]).to_string(),
+            );
+        }
+        serde_json::to_string(&services).context("failed to serialize service status")
+    }
+
+    fn tool_get_version(&self) -> Result<String> {
+        Ok(format!("trusty-izzie v{}", env!("CARGO_PKG_VERSION")))
+    }
+
+    fn tool_submit_github_issue(&self, input: &serde_json::Value) -> Result<String> {
+        let title = input["title"].as_str().unwrap_or("").trim().to_string();
+        let body = input["body"].as_str().unwrap_or("").trim().to_string();
+        if title.is_empty() {
+            return Ok("Error: title is required".to_string());
+        }
+        let mut cmd = std::process::Command::new("gh");
+        cmd.args([
+            "issue",
+            "create",
+            "--repo",
+            "bobmatnyc/trusty-izzie",
+            "--title",
+            &title,
+            "--body",
+            &body,
+        ]);
+        if let Some(labels) = input["labels"].as_array() {
+            for label in labels {
+                if let Some(l) = label.as_str() {
+                    cmd.args(["--label", l]);
+                }
+            }
+        }
+        let output = cmd.output().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!("gh CLI not found — install from https://cli.github.com")
+            } else {
+                anyhow::anyhow!("failed to run gh: {}", e)
+            }
+        })?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Ok(format!("Error filing issue: {}", stderr))
+        }
+    }
+
+    fn tool_list_agents(&self) -> Result<String> {
+        let mut agents = Vec::new();
+        let entries = std::fs::read_dir(&self.agents_dir)
+            .map_err(|e| anyhow::anyhow!("cannot read agents dir: {e}"))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let (model, max_runtime_mins, description, _body) =
+                self.parse_agent_front_matter(&content);
+            agents.push(serde_json::json!({
+                "name": stem,
+                "model": model,
+                "description": description,
+                "max_runtime_mins": max_runtime_mins,
+            }));
+        }
+        serde_json::to_string(&agents).context("failed to serialize agents")
+    }
+
+    fn tool_run_agent(&self, input: &serde_json::Value) -> Result<String> {
+        let agent_name = input["agent_name"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let task_description = input["task_description"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if agent_name.is_empty() {
+            return Ok("Error: agent_name is required".to_string());
+        }
+        if task_description.is_empty() {
+            return Ok("Error: task_description is required".to_string());
+        }
+        let context = input["context"].as_str().map(|s| s.to_string());
+        let payload = EventPayload::AgentRun {
+            agent_name,
+            task_description,
+            context,
+        };
+        let now = chrono::Utc::now().timestamp();
+        let id = self.sqlite_ref()?.enqueue_event(
+            &EventType::AgentRun,
+            &payload,
+            now,
+            EventType::AgentRun.default_priority(),
+            EventType::AgentRun.default_max_retries(),
+            "chat",
+            None,
+        )?;
+        serde_json::to_string(&serde_json::json!({ "task_id": id }))
+            .context("failed to serialize response")
+    }
+
+    fn tool_get_agent_task(&self, input: &serde_json::Value) -> Result<String> {
+        let task_id = input["task_id"].as_str().unwrap_or("").trim().to_string();
+        if task_id.is_empty() {
+            return Ok("Error: task_id is required".to_string());
+        }
+        let task = self.sqlite_ref()?.get_agent_task(&task_id)?;
+        match task {
+            None => Ok(format!("No task found with id: {}", task_id)),
+            Some(t) => {
+                let output_preview = t.output.as_deref().map(|o| {
+                    if o.len() > 500 {
+                        format!("{}... [truncated]", &o[..500])
+                    } else {
+                        o.to_string()
+                    }
+                });
+                serde_json::to_string(&serde_json::json!({
+                    "id": t.id,
+                    "agent_name": t.agent_name,
+                    "task_description": t.task_description,
+                    "status": t.status,
+                    "model": t.model,
+                    "output": output_preview,
+                    "error": t.error,
+                    "created_at": t.created_at,
+                    "started_at": t.started_at,
+                    "completed_at": t.completed_at,
+                }))
+                .context("failed to serialize task")
+            }
+        }
+    }
+
+    /// Parse YAML front-matter from agent MD content.
+    /// Returns (model, max_runtime_mins, description, body).
+    fn parse_agent_front_matter(&self, content: &str) -> (String, u32, String, String) {
+        let default_model = "anthropic/claude-sonnet-4-5".to_string();
+        if !content.starts_with("---") {
+            return (default_model, 30, String::new(), content.to_string());
+        }
+        let rest = &content[3..];
+        let end = rest.find("\n---").unwrap_or(rest.len());
+        let front_matter = &rest[..end];
+        let body = rest
+            .get(end + 4..)
+            .unwrap_or("")
+            .trim_start_matches('\n')
+            .to_string();
+        let mut model = default_model;
+        let mut max_runtime_mins: u32 = 30;
+        let mut description = String::new();
+        for line in front_matter.lines() {
+            if let Some(val) = line.strip_prefix("model:") {
+                model = val.trim().to_string();
+            } else if let Some(val) = line.strip_prefix("max_runtime_mins:") {
+                max_runtime_mins = val.trim().parse().unwrap_or(30);
+            } else if let Some(val) = line.strip_prefix("description:") {
+                description = val.trim().to_string();
+            }
+        }
+        (model, max_runtime_mins, description, body)
     }
 
     /// Process a single user turn, returning the assistant's reply.
@@ -335,6 +560,15 @@ fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str) -> String {
 
 Today is {}. Current time: {}.{context_section}
 
+## My Deployment
+
+I am trusty-izzie v{}, running as macOS launchd services:
+- Daemon (com.trusty-izzie.daemon) — event processing, Gmail sync
+- API (com.trusty-izzie.api) — REST API on port 3456
+- Telegram (com.trusty-izzie.telegram) — Telegram bot on port 3457
+
+I can check my own service status with `check_service_status`, report my version with `get_version`, and file GitHub issues with `submit_github_issue`.
+
 CRITICAL OUTPUT FORMAT: Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
 
 Required format (output this and nothing else):
@@ -343,6 +577,7 @@ Required format (output this and nothing else):
 Be helpful, concise, and honest. Only include items in memoriesToSave if you learned something genuinely new and useful. Be selective — 0-1 memories per turn is typical."#,
         now.format("%A, %B %d, %Y"),
         now.format("%H:%M UTC"),
+        env!("CARGO_PKG_VERSION"),
     )
 }
 

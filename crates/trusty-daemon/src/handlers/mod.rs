@@ -4,6 +4,7 @@ use trusty_core::error::TrustyError;
 use trusty_models::{EventPayload, EventType, QueuedEvent};
 use trusty_store::Store;
 
+pub mod agent_run;
 pub mod calendar_refresh;
 pub mod email_sync;
 pub mod entity_extraction;
@@ -11,6 +12,7 @@ pub mod memory_decay;
 pub mod needs_reauth;
 pub mod reminder;
 
+pub use agent_run::AgentRunHandler;
 pub use calendar_refresh::CalendarRefreshHandler;
 pub use email_sync::EmailSyncHandler;
 pub use entity_extraction::EntityExtractionHandler;

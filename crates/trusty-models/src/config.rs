@@ -17,6 +17,9 @@ pub struct AppConfig {
     pub chat: ChatConfig,
     /// REST API server settings.
     pub api: ApiConfig,
+    /// Agent system settings.
+    #[serde(default)]
+    pub agents: AgentsConfig,
 }
 
 /// OpenRouter API configuration.
@@ -91,4 +94,24 @@ pub struct ApiConfig {
     pub port: u16,
     /// IP address to bind the server.
     pub host: String,
+}
+
+/// Agent system configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentsConfig {
+    /// Directory containing agent definition Markdown files.
+    #[serde(default = "default_agents_dir")]
+    pub agents_dir: String,
+}
+
+fn default_agents_dir() -> String {
+    "docs/agents".to_string()
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            agents_dir: default_agents_dir(),
+        }
+    }
 }

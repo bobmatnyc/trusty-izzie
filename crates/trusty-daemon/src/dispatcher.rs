@@ -4,9 +4,11 @@ use tracing::{error, info, warn};
 use trusty_core::error::TrustyError;
 use trusty_store::Store;
 
+use std::path::PathBuf;
+
 use crate::handlers::{
-    CalendarRefreshHandler, DispatchResult, EmailSyncHandler, EntityExtractionHandler,
-    EventHandler, MemoryDecayHandler, NeedsReauthHandler, ReminderHandler,
+    AgentRunHandler, CalendarRefreshHandler, DispatchResult, EmailSyncHandler,
+    EntityExtractionHandler, EventHandler, MemoryDecayHandler, NeedsReauthHandler, ReminderHandler,
 };
 
 pub struct EventDispatcher {
@@ -24,16 +26,34 @@ fn exponential_backoff(attempts: i64) -> i64 {
 
 impl EventDispatcher {
     pub fn new(store: Arc<Store>) -> Self {
+        Self::new_with_agents(
+            store,
+            PathBuf::from("docs/agents"),
+            "https://openrouter.ai/api/v1".to_string(),
+            std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
+        )
+    }
+
+    pub fn new_with_agents(
+        store: Arc<Store>,
+        agents_dir: PathBuf,
+        openrouter_base: String,
+        openrouter_api_key: String,
+    ) -> Self {
         let mut handlers: HashMap<String, Box<dyn EventHandler>> = HashMap::new();
 
-        for h in Self::all_handlers() {
+        for h in Self::all_handlers(agents_dir, openrouter_base, openrouter_api_key) {
             handlers.insert(h.event_type().as_str().to_string(), h);
         }
 
         Self { store, handlers }
     }
 
-    fn all_handlers() -> Vec<Box<dyn EventHandler>> {
+    fn all_handlers(
+        agents_dir: PathBuf,
+        openrouter_base: String,
+        openrouter_api_key: String,
+    ) -> Vec<Box<dyn EventHandler>> {
         vec![
             Box::new(NeedsReauthHandler),
             Box::new(ReminderHandler),
@@ -41,6 +61,11 @@ impl EventDispatcher {
             Box::new(EntityExtractionHandler),
             Box::new(MemoryDecayHandler),
             Box::new(CalendarRefreshHandler),
+            Box::new(AgentRunHandler::new(
+                agents_dir,
+                openrouter_base,
+                openrouter_api_key,
+            )),
         ]
     }
 

@@ -65,6 +65,11 @@ help:
 	@echo "  make test-features       Test all CLI features against real DB (dry-run)"
 	@echo "  make test-features-chat  Same + live chat (uses OpenRouter tokens)"
 	@echo ""
+	@echo "Deployment:"
+	@echo "  make install        Build release + install binaries + load launchd services"
+	@echo "  make uninstall      Unload launchd services (prompts before removing data)"
+	@echo "  make launchd-status Show status of all com.trusty-izzie.* launchd services"
+	@echo ""
 	@echo "Dev:"
 	@echo "  make test           Run all unit tests"
 	@echo "  make clippy         Run clippy (warnings as errors)"
@@ -215,3 +220,17 @@ ngrok:
 .PHONY: clean
 clean:
 	cargo clean
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+.PHONY: install
+install:
+	@./scripts/install.sh
+
+.PHONY: uninstall
+uninstall:
+	@./scripts/uninstall.sh
+
+.PHONY: launchd-status
+launchd-status:
+	@launchctl list | grep trusty-izzie | awk '{printf "  %-45s PID=%-8s Exit=%s\n", $$3, $$1, $$2}' || echo "  no trusty-izzie services running"

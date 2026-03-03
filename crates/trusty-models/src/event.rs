@@ -11,6 +11,7 @@ pub enum EventType {
     MemoryDecay,
     CalendarRefresh,
     NeedsReauth,
+    AgentRun,
 }
 
 impl EventType {
@@ -22,6 +23,7 @@ impl EventType {
             EventType::MemoryDecay => "memory_decay",
             EventType::CalendarRefresh => "calendar_refresh",
             EventType::NeedsReauth => "needs_reauth",
+            EventType::AgentRun => "agent_run",
         }
     }
 
@@ -29,6 +31,7 @@ impl EventType {
         match self {
             EventType::NeedsReauth => 1,
             EventType::Reminder => 2,
+            EventType::AgentRun => 3,
             EventType::EmailSync => 4,
             EventType::EntityExtraction => 5,
             EventType::CalendarRefresh => 6,
@@ -40,6 +43,7 @@ impl EventType {
         match self {
             EventType::NeedsReauth => 1,
             EventType::Reminder => 1,
+            EventType::AgentRun => 1,
             EventType::EmailSync => 3,
             EventType::EntityExtraction => 5,
             EventType::CalendarRefresh => 3,
@@ -58,6 +62,7 @@ impl std::str::FromStr for EventType {
             "memory_decay" => Ok(EventType::MemoryDecay),
             "calendar_refresh" => Ok(EventType::CalendarRefresh),
             "needs_reauth" => Ok(EventType::NeedsReauth),
+            "agent_run" => Ok(EventType::AgentRun),
             _ => Err(format!("unknown event type: {}", s)),
         }
     }
@@ -87,6 +92,13 @@ pub enum EventPayload {
     NeedsReauth {
         /// Reason code: "no_token" | "token_expired" | "auth_error"
         reason: String,
+    },
+    AgentRun {
+        /// Matches the filename stem in docs/agents/{agent_name}.md
+        agent_name: String,
+        task_description: String,
+        /// Optional extra context injected into the agent prompt
+        context: Option<String>,
     },
 }
 
