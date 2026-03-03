@@ -43,6 +43,12 @@ pub enum ToolName {
     RunAgent,
     /// Get the status and output of an agent task by ID.
     GetAgentTask,
+    /// List all registered Google accounts.
+    ListAccounts,
+    /// Add a new Google account (returns OAuth URL; email resolved after consent).
+    AddAccount,
+    /// Deactivate a secondary Google account (stops syncing it).
+    RemoveAccount,
 }
 
 /// A parsed tool call request from the LLM.

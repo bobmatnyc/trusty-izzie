@@ -11,6 +11,7 @@ trusty-models = { path = "../trusty-models" }
 trusty-store = { path = "../trusty-store" }
 trusty-memory = { path = "../trusty-memory" }
 trusty-extractor = { path = "../trusty-extractor" }
+trusty-email = { path = "../trusty-email" }
 
 reqwest = { workspace = true }
 anyhow = { workspace = true }

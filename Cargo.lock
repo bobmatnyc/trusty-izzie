@@ -7471,6 +7471,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "trusty-email",
  "trusty-extractor",
  "trusty-memory",
  "trusty-models",

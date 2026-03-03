@@ -337,20 +337,78 @@ async fn oauth_callback_handler(
     };
     let refresh_token = body["refresh_token"].as_str().unwrap_or("").to_string();
 
+    // Resolve the authenticated email via Google userinfo.
+    let userinfo_client = reqwest::Client::new();
+    let auth_email = match userinfo_client
+        .get("https://www.googleapis.com/oauth2/v3/userinfo")
+        .bearer_auth(&access_token)
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let info: serde_json::Value = r.json().await.unwrap_or_default();
+            info["email"]
+                .as_str()
+                .unwrap_or("unknown@example.com")
+                .to_string()
+        }
+        Err(e) => {
+            warn!("Could not fetch userinfo: {e}");
+            "unknown@example.com".to_string()
+        }
+    };
+
+    // Store in oauth_tokens table (proper per-account path).
+    let expires_at = body["expires_in"]
+        .as_i64()
+        .map(|secs| chrono::Utc::now().timestamp() + secs);
+    if let Err(e) = state.sqlite.upsert_oauth_token(
+        &auth_email,
+        &access_token,
+        if refresh_token.is_empty() {
+            None
+        } else {
+            Some(refresh_token.as_str())
+        },
+        expires_at,
+        Some("https://mail.google.com/"),
+    ) {
+        error!("Failed to store oauth_token for {auth_email}: {e}");
+    }
+
+    // Register account (primary or secondary).
+    let primary_email =
+        std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+    let account_type = if auth_email == primary_email {
+        "primary"
+    } else {
+        "secondary"
+    };
     if let Err(e) = state
         .sqlite
-        .set_config("google_access_token", &access_token)
+        .add_account(&auth_email, Some(&auth_email), account_type)
     {
-        error!("Failed to store access token: {e}");
+        error!("Failed to register account {auth_email}: {e}");
     }
-    if !refresh_token.is_empty() {
+
+    // Backward compat: also write kv_config for the primary account (sync loop reads this).
+    if auth_email == primary_email {
         if let Err(e) = state
             .sqlite
-            .set_config("google_refresh_token", &refresh_token)
+            .set_config("google_access_token", &access_token)
         {
-            error!("Failed to store refresh token: {e}");
+            error!("Failed to store access token in kv_config: {e}");
+        }
+        if !refresh_token.is_empty() {
+            if let Err(e) = state
+                .sqlite
+                .set_config("google_refresh_token", &refresh_token)
+            {
+                error!("Failed to store refresh token in kv_config: {e}");
+            }
         }
     }
+
     // Clear the one-time verifier.
     let _ = state.sqlite.set_config("oauth_pkce_verifier", "");
 
@@ -359,11 +417,12 @@ async fn oauth_callback_handler(
         if let Ok(cid) = s.parse::<i64>() {
             if cid != 0 {
                 let tok = state.bot_token.clone();
+                let auth_email_notify = auth_email.clone();
                 tokio::spawn(async move {
                     let _ = send_reply(
                         &tok,
                         cid,
-                        "✅ Gmail connected! Trusty Izzie will now sync your sent mail.",
+                        &format!("✅ Gmail connected ({auth_email_notify})! Trusty Izzie will now sync your sent mail."),
                     )
                     .await;
                 });
@@ -376,8 +435,7 @@ async fn oauth_callback_handler(
     (
         StatusCode::OK,
         axum::response::Html(
-            "<html><body><h2>Authenticated!</h2><p>Trusty Izzie is now connected to Gmail.</p><p>A confirmation was sent to your Telegram. You can close this tab.</p></body></html>"
-                .to_string(),
+            format!("<html><body><h2>Authenticated!</h2><p>Trusty Izzie is now connected to Gmail as <strong>{auth_email}</strong>.</p><p>A confirmation was sent to your Telegram. You can close this tab.</p></body></html>"),
         ),
     )
 }
@@ -392,10 +450,11 @@ async fn webhook_handler(
     };
 
     let chat_id = msg.chat.id;
+    let sender_user_id = msg.from.as_ref().map(|u| u.id);
 
     // Authorisation check
     if !state.allowed_users.is_empty() {
-        let uid = msg.from.map(|u| u.id).unwrap_or(0);
+        let uid = sender_user_id.unwrap_or(0);
         if !state.allowed_users.contains(&uid) {
             let token = state.bot_token.clone();
             tokio::spawn(async move {
@@ -403,6 +462,23 @@ async fn webhook_handler(
             });
             return StatusCode::OK;
         }
+    }
+
+    // Log inbound message.
+    let inbound_text = msg
+        .text
+        .as_deref()
+        .or(msg.caption.as_deref())
+        .unwrap_or("[document]");
+    if let Err(e) = state.sqlite.log_telegram_interaction(
+        "inbound",
+        chat_id,
+        sender_user_id,
+        None,
+        inbound_text,
+        None,
+    ) {
+        warn!("Failed to log inbound telegram message: {e}");
     }
 
     // Persist chat_id for proactive daemon notifications (e.g., NeedsReauth).
@@ -500,6 +576,7 @@ async fn webhook_handler(
     let token = state.bot_token.clone();
     let extractor = Arc::clone(&state.extractor);
     let store = Arc::clone(&state.store);
+    let sqlite_log = Arc::clone(&state.sqlite);
     let user_ctx = state.user_context.clone();
     let min_occ = state.min_occurrences;
     let gdrive_token = state.gdrive_token.clone();
@@ -528,6 +605,16 @@ async fn webhook_handler(
                     "Chat turn complete"
                 );
                 let _ = send_reply(&token, chat_id, &response.reply).await;
+                if let Err(e) = sqlite_log.log_telegram_interaction(
+                    "outbound",
+                    chat_id,
+                    None,
+                    None,
+                    &response.reply,
+                    None,
+                ) {
+                    warn!("Failed to log outbound telegram message: {e}");
+                }
             }
             Err(e) => {
                 error!("Chat error: {e}");
@@ -836,13 +923,31 @@ async fn main() -> Result<()> {
 
             let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
 
-            let engine = Arc::new(ChatEngine::new_with_context(
-                config.openrouter.base_url.clone(),
-                api_key.clone(),
-                config.openrouter.chat_model.clone(),
-                config.chat.max_tool_iterations,
-                assembler,
-            ));
+            // Build user context from environment / config.
+            let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
+                .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+            let user_context = UserContext {
+                user_id: INSTANCE_ID.to_string(),
+                email: primary_email.clone(),
+                display_name: primary_email.clone(),
+            };
+
+            let engine = Arc::new(
+                ChatEngine::new_with_context(
+                    config.openrouter.base_url.clone(),
+                    api_key.clone(),
+                    config.openrouter.chat_model.clone(),
+                    config.chat.max_tool_iterations,
+                    assembler,
+                )
+                .with_sqlite(Arc::clone(&store.sqlite))
+                .with_agents_dir(data_dir.join("agents")),
+            );
+
+            // Seed the primary account (idempotent).
+            if let Err(e) = store.sqlite.seed_primary_account(&primary_email) {
+                warn!("Failed to seed primary account: {e}");
+            }
 
             // Build the entity extractor.
             let extractor = Arc::new(EntityExtractor::new(ExtractorConfig {
@@ -854,33 +959,85 @@ async fn main() -> Result<()> {
                 max_relationships: 3,
             }));
 
-            // Build user context from environment / config.
-            let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
-                .unwrap_or_else(|_| "bobmatnyc@gmail.com".to_string());
-            let user_context = UserContext {
-                user_id: INSTANCE_ID.to_string(),
-                email: primary_email.clone(),
-                display_name: primary_email.clone(),
-            };
-
             let min_occurrences = 2u32;
             let gdrive_token = sqlite.get_config("google_access_token").ok().flatten();
 
-            // Spawn the background email sync loop.
+            // Spawn per-account background email sync loops.
             {
-                let store_sync = Arc::clone(&store);
-                let extractor_sync = Arc::clone(&extractor);
-                let user_ctx_sync = user_context.clone();
-                let _sync_handle = tokio::task::spawn(async move {
-                    email_sync::run_email_sync_loop(
-                        store_sync,
-                        extractor_sync,
-                        user_ctx_sync,
-                        3600,
-                        min_occurrences,
-                    )
-                    .await;
-                });
+                let accounts_for_sync = store
+                    .sqlite
+                    .list_accounts()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|a| a.is_active)
+                    .collect::<Vec<_>>();
+
+                // Always include primary with fallback token resolution.
+                let accounts_to_sync: Vec<(UserContext, Option<String>)> =
+                    if accounts_for_sync.is_empty() {
+                        // No accounts registered yet — use user_context for primary.
+                        vec![(
+                            user_context.clone(),
+                            store
+                                .sqlite
+                                .get_config("google_access_token")
+                                .ok()
+                                .flatten(),
+                        )]
+                    } else {
+                        accounts_for_sync
+                            .iter()
+                            .filter_map(|acc| {
+                                // Try oauth_tokens table first, then kv_config for primary.
+                                let token = store
+                                    .sqlite
+                                    .get_oauth_token(&acc.email)
+                                    .ok()
+                                    .flatten()
+                                    .map(|t| t.access_token)
+                                    .or_else(|| {
+                                        if acc.account_type == "primary" {
+                                            store
+                                                .sqlite
+                                                .get_config("google_access_token")
+                                                .ok()
+                                                .flatten()
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                if token.is_none() {
+                                    warn!("No OAuth token for {}, skipping sync", acc.email);
+                                }
+                                token.map(|tok| {
+                                    let ctx = UserContext {
+                                        user_id: acc.email.clone(),
+                                        email: acc.email.clone(),
+                                        display_name: acc
+                                            .display_name
+                                            .clone()
+                                            .unwrap_or_else(|| acc.email.clone()),
+                                    };
+                                    (ctx, Some(tok))
+                                })
+                            })
+                            .collect()
+                    };
+
+                for (user_ctx, _token_opt) in accounts_to_sync {
+                    let store_sync = Arc::clone(&store);
+                    let extractor_sync = Arc::clone(&extractor);
+                    let _sync_handle = tokio::task::spawn(async move {
+                        email_sync::run_email_sync_loop(
+                            store_sync,
+                            extractor_sync,
+                            user_ctx,
+                            3600,
+                            min_occurrences,
+                        )
+                        .await;
+                    });
+                }
             }
 
             if allowed.is_empty() {

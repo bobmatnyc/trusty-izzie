@@ -133,6 +133,30 @@ impl SqliteStore {
                 parent_event_id  TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_at_status ON agent_tasks(status, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS accounts (
+                id           TEXT PRIMARY KEY,
+                email        TEXT NOT NULL UNIQUE,
+                display_name TEXT,
+                account_type TEXT NOT NULL DEFAULT 'secondary'
+                             CHECK(account_type IN ('primary', 'secondary')),
+                is_active    INTEGER NOT NULL DEFAULT 1,
+                created_at   INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_accounts_active ON accounts (is_active, account_type);
+
+            CREATE TABLE IF NOT EXISTS telegram_logs (
+                id          TEXT PRIMARY KEY,
+                direction   TEXT NOT NULL CHECK(direction IN ('inbound', 'outbound')),
+                chat_id     INTEGER NOT NULL,
+                user_id     INTEGER,
+                username    TEXT,
+                message     TEXT NOT NULL,
+                tool_calls  TEXT,
+                created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE INDEX IF NOT EXISTS idx_tg_logs_chat ON telegram_logs (chat_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_tg_logs_created ON telegram_logs (created_at DESC);
             "#,
         )?;
         Ok(())
@@ -683,6 +707,158 @@ impl SqliteStore {
             }
         }
         Ok(tasks)
+    }
+
+    // ── Accounts ──────────────────────────────────────────────────────────────
+
+    /// Seed the primary account at startup (INSERT OR IGNORE — idempotent).
+    pub fn seed_primary_account(&self, email: &str) -> Result<()> {
+        let id = format!("primary-{}", email);
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            r#"
+            INSERT OR IGNORE INTO accounts (id, email, display_name, account_type, is_active)
+            VALUES (?1, ?2, ?2, 'primary', 1)
+            "#,
+            rusqlite::params![id, email],
+        )?;
+        Ok(())
+    }
+
+    /// List all accounts ordered by type ('primary' first), then created_at.
+    pub fn list_accounts(&self) -> Result<Vec<trusty_models::Account>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, email, display_name, account_type, is_active, created_at
+             FROM accounts
+             ORDER BY CASE account_type WHEN 'primary' THEN 0 ELSE 1 END ASC, created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(trusty_models::Account {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                display_name: row.get(2)?,
+                account_type: row.get(3)?,
+                is_active: row.get::<_, i64>(4)? != 0,
+                created_at: row.get(5)?,
+            })
+        })?;
+        let mut accounts = Vec::new();
+        for row in rows {
+            accounts.push(row?);
+        }
+        Ok(accounts)
+    }
+
+    /// Add or update an account (INSERT OR REPLACE).
+    pub fn add_account(
+        &self,
+        email: &str,
+        display_name: Option<&str>,
+        account_type: &str,
+    ) -> Result<()> {
+        let id = format!("{}-{}", account_type, email);
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO accounts (id, email, display_name, account_type, is_active)
+            VALUES (?1, ?2, ?3, ?4, 1)
+            ON CONFLICT(email) DO UPDATE SET
+                display_name = excluded.display_name,
+                account_type = excluded.account_type,
+                is_active    = 1
+            "#,
+            rusqlite::params![id, email, display_name.unwrap_or(email), account_type],
+        )?;
+        Ok(())
+    }
+
+    /// Deactivate a secondary account (is_active = 0). Returns Err if primary or not found.
+    pub fn deactivate_account(&self, email: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let account_type: Option<String> = conn
+            .query_row(
+                "SELECT account_type FROM accounts WHERE email = ?1",
+                rusqlite::params![email],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match account_type.as_deref() {
+            None => return Err(anyhow::anyhow!("Account not found: {}", email)),
+            Some("primary") => {
+                return Err(anyhow::anyhow!("Cannot deactivate the primary account"))
+            }
+            _ => {}
+        }
+        conn.execute(
+            "UPDATE accounts SET is_active = 0 WHERE email = ?1",
+            rusqlite::params![email],
+        )?;
+        Ok(())
+    }
+
+    /// Get a single account by email.
+    pub fn get_account(&self, email: &str) -> Result<Option<trusty_models::Account>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, email, display_name, account_type, is_active, created_at
+             FROM accounts WHERE email = ?1",
+        )?;
+        let result = stmt
+            .query_row(rusqlite::params![email], |row| {
+                Ok(trusty_models::Account {
+                    id: row.get(0)?,
+                    email: row.get(1)?,
+                    display_name: row.get(2)?,
+                    account_type: row.get(3)?,
+                    is_active: row.get::<_, i64>(4)? != 0,
+                    created_at: row.get(5)?,
+                })
+            })
+            .optional()?;
+        Ok(result)
+    }
+
+    /// Get OAuth token row by user_id (= email).
+    pub fn get_oauth_token(&self, user_id: &str) -> Result<Option<trusty_models::OAuthToken>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT user_id, access_token, refresh_token, expires_at
+             FROM oauth_tokens WHERE user_id = ?1",
+        )?;
+        let result = stmt
+            .query_row(rusqlite::params![user_id], |row| {
+                Ok(trusty_models::OAuthToken {
+                    user_id: row.get(0)?,
+                    access_token: row.get(1)?,
+                    refresh_token: row.get(2)?,
+                    expires_at: row.get(3)?,
+                })
+            })
+            .optional()?;
+        Ok(result)
+    }
+
+    // ── Telegram logs ─────────────────────────────────────────────────────────
+
+    /// Log a Telegram interaction (inbound message or outbound reply).
+    pub fn log_telegram_interaction(
+        &self,
+        direction: &str, // "inbound" | "outbound"
+        chat_id: i64,
+        user_id: Option<i64>,
+        username: Option<&str>,
+        message: &str,
+        tool_calls: Option<&str>,
+    ) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO telegram_logs (id, direction, chat_id, user_id, username, message, tool_calls)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![id, direction, chat_id, user_id, username, message, tool_calls],
+        )?;
+        Ok(())
     }
 
     /// List events, optionally filtered by status, newest first.

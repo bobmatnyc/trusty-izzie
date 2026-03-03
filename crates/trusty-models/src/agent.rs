@@ -25,3 +25,23 @@ pub struct AgentTask {
     /// The event_queue ID that triggered this task.
     pub parent_event_id: Option<String>,
 }
+
+/// A Google account registered for email sync.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Account {
+    pub id: String,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub account_type: String, // "primary" | "secondary"
+    pub is_active: bool,
+    pub created_at: i64,
+}
+
+/// An OAuth2 token row from the `oauth_tokens` table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OAuthToken {
+    pub user_id: String,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<i64>,
+}

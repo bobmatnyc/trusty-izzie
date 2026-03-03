@@ -140,6 +140,9 @@ impl ChatEngine {
             ToolName::ListAgents => self.tool_list_agents(),
             ToolName::RunAgent => self.tool_run_agent(input),
             ToolName::GetAgentTask => self.tool_get_agent_task(input),
+            ToolName::ListAccounts => self.tool_list_accounts(),
+            ToolName::AddAccount => self.tool_add_account(),
+            ToolName::RemoveAccount => self.tool_remove_account(input),
             _ => Ok("Tool not yet implemented.".to_string()),
         }
     }
@@ -436,6 +439,72 @@ impl ChatEngine {
         (model, max_runtime_mins, description, body)
     }
 
+    fn tool_list_accounts(&self) -> Result<String> {
+        let sqlite = self.sqlite_ref()?;
+        let accounts = sqlite.list_accounts()?;
+        if accounts.is_empty() {
+            return Ok("No accounts registered yet.".to_string());
+        }
+        let json = serde_json::to_string(
+            &accounts
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "email": a.email,
+                        "type": a.account_type,
+                        "active": a.is_active,
+                        "display_name": a.display_name,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        Ok(json)
+    }
+
+    fn tool_add_account(&self) -> Result<String> {
+        let sqlite = self.sqlite_ref()?;
+        let (verifier, challenge) = trusty_email::auth::generate_pkce_pair();
+        sqlite.set_config("oauth_pkce_verifier", &verifier)?;
+
+        let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+        let ngrok_domain =
+            std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
+        let redirect_uri = format!("https://{}/api/auth/google/callback", ngrok_domain);
+
+        let scopes = "https://mail.google.com/ https://www.googleapis.com/auth/userinfo.email";
+        let mut url = reqwest::Url::parse("https://accounts.google.com/o/oauth2/v2/auth")
+            .context("failed to parse Google auth URL")?;
+        url.query_pairs_mut()
+            .append_pair("client_id", &client_id)
+            .append_pair("redirect_uri", &redirect_uri)
+            .append_pair("response_type", "code")
+            .append_pair("scope", scopes)
+            .append_pair("code_challenge", &challenge)
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("access_type", "offline")
+            .append_pair("prompt", "select_account consent");
+
+        Ok(format!(
+            "To add a Google account, visit:\n\n{}\n\nAfter granting access, the account will be registered automatically.",
+            url
+        ))
+    }
+
+    fn tool_remove_account(&self, input: &serde_json::Value) -> Result<String> {
+        let email = input["email"].as_str().unwrap_or("").trim();
+        if email.is_empty() {
+            return Ok("Error: email is required".to_string());
+        }
+        let sqlite = self.sqlite_ref()?;
+        match sqlite.deactivate_account(email) {
+            Ok(()) => Ok(format!(
+                "Account {} deactivated. It will no longer be synced.",
+                email
+            )),
+            Err(e) => Ok(format!("Error: {e}")),
+        }
+    }
+
     /// Process a single user turn, returning the assistant's reply.
     ///
     /// The caller is responsible for loading and saving the session.
@@ -568,6 +637,9 @@ I am trusty-izzie v{}, running as macOS launchd services:
 - Telegram (com.trusty-izzie.telegram) — Telegram bot on port 3457
 
 I can check my own service status with `check_service_status`, report my version with `get_version`, and file GitHub issues with `submit_github_issue`.
+
+## Email Accounts
+I learn from email sent from multiple Google accounts. Use `list_accounts` to see all registered accounts, `add_account` to add a new Google account (I'll return an OAuth URL to visit), or `remove_account` to stop syncing a secondary account.
 
 CRITICAL OUTPUT FORMAT: Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
 
