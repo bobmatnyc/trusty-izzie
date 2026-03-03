@@ -10,8 +10,10 @@ pub mod contacts_sync;
 pub mod email_sync;
 pub mod entity_extraction;
 pub mod memory_decay;
+pub mod messages_sync;
 pub mod needs_reauth;
 pub mod reminder;
+pub mod whatsapp_sync;
 
 pub use agent_run::AgentRunHandler;
 pub use calendar_refresh::CalendarRefreshHandler;
@@ -19,8 +21,10 @@ pub use contacts_sync::ContactsSyncHandler;
 pub use email_sync::EmailSyncHandler;
 pub use entity_extraction::EntityExtractionHandler;
 pub use memory_decay::MemoryDecayHandler;
+pub use messages_sync::MessagesSyncHandler;
 pub use needs_reauth::NeedsReauthHandler;
 pub use reminder::ReminderHandler;
+pub use whatsapp_sync::WhatsAppSyncHandler;
 
 /// The outcome of dispatching an event.
 #[derive(Debug)]

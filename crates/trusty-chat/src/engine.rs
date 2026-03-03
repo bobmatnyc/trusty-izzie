@@ -144,6 +144,8 @@ impl ChatEngine {
             ToolName::AddAccount => self.tool_add_account(),
             ToolName::RemoveAccount => self.tool_remove_account(input),
             ToolName::SyncContacts => self.tool_sync_contacts(),
+            ToolName::SyncMessages => self.tool_sync_messages(),
+            ToolName::SyncWhatsApp => self.tool_sync_whatsapp(input),
             ToolName::ExecuteShellCommand => self.tool_execute_shell_command(input),
             _ => Ok("Tool not yet implemented.".to_string()),
         }
@@ -197,6 +199,11 @@ impl ChatEngine {
                 context: input["context"].as_str().map(|s| s.to_string()),
             },
             EventType::ContactsSync => EventPayload::ContactsSync { force: false },
+            EventType::MessagesSync => EventPayload::MessagesSync { force: false },
+            EventType::WhatsAppSync => EventPayload::WhatsAppSync {
+                export_path: input["export_path"].as_str().map(|s| s.to_string()),
+                force: false,
+            },
         };
 
         let id = self.sqlite_ref()?.enqueue_event(
@@ -455,6 +462,40 @@ impl ChatEngine {
             None,
         )?;
         Ok("macOS Contacts sync queued. I'll process your AddressBook and update my knowledge of your contacts shortly. Note: the first run will prompt for Contacts permission if not already granted.".to_string())
+    }
+
+    fn tool_sync_messages(&self) -> Result<String> {
+        let sqlite = self.sqlite_ref()?;
+        let now = chrono::Utc::now().timestamp();
+        sqlite.enqueue_event(
+            &EventType::MessagesSync,
+            &EventPayload::MessagesSync { force: false },
+            now,
+            5,
+            3,
+            "chat",
+            None,
+        )?;
+        Ok("iMessage/SMS sync queued. I'll read your Messages database and extract relationship context. This requires Full Disk Access — if not already granted, go to System Settings → Privacy & Security → Full Disk Access and add Trusty Izzie.".to_string())
+    }
+
+    fn tool_sync_whatsapp(&self, input: &serde_json::Value) -> Result<String> {
+        let export_path = input["export_path"].as_str().map(|s| s.to_string());
+        let sqlite = self.sqlite_ref()?;
+        let now = chrono::Utc::now().timestamp();
+        sqlite.enqueue_event(
+            &EventType::WhatsAppSync,
+            &EventPayload::WhatsAppSync {
+                export_path,
+                force: false,
+            },
+            now,
+            5,
+            3,
+            "chat",
+            None,
+        )?;
+        Ok("WhatsApp sync queued. I'll read your WhatsApp message history and extract relationship context.".to_string())
     }
 
     fn tool_list_accounts(&self) -> Result<String> {

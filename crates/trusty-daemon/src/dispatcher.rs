@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use crate::handlers::{
     AgentRunHandler, CalendarRefreshHandler, ContactsSyncHandler, DispatchResult, EmailSyncHandler,
-    EntityExtractionHandler, EventHandler, MemoryDecayHandler, NeedsReauthHandler, ReminderHandler,
+    EntityExtractionHandler, EventHandler, MemoryDecayHandler, MessagesSyncHandler,
+    NeedsReauthHandler, ReminderHandler, WhatsAppSyncHandler,
 };
 
 pub struct EventDispatcher {
@@ -59,6 +60,8 @@ impl EventDispatcher {
             Box::new(ReminderHandler),
             Box::new(EmailSyncHandler),
             Box::new(ContactsSyncHandler),
+            Box::new(MessagesSyncHandler),
+            Box::new(WhatsAppSyncHandler),
             Box::new(EntityExtractionHandler),
             Box::new(MemoryDecayHandler),
             Box::new(CalendarRefreshHandler),

@@ -51,6 +51,10 @@ pub enum ToolName {
     RemoveAccount,
     /// Queue a macOS Contacts (AddressBook) sync.
     SyncContacts,
+    /// Queue an iMessage/SMS sync from the macOS Messages database.
+    SyncMessages,
+    /// Queue a WhatsApp sync (live DB or exported .txt file).
+    SyncWhatsApp,
     /// Execute a bash shell command and return stdout/stderr.
     ExecuteShellCommand,
 }

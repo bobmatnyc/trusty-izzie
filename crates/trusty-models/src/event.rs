@@ -13,6 +13,8 @@ pub enum EventType {
     NeedsReauth,
     AgentRun,
     ContactsSync,
+    MessagesSync,
+    WhatsAppSync,
 }
 
 impl EventType {
@@ -26,6 +28,8 @@ impl EventType {
             EventType::NeedsReauth => "needs_reauth",
             EventType::AgentRun => "agent_run",
             EventType::ContactsSync => "contacts_sync",
+            EventType::MessagesSync => "messages_sync",
+            EventType::WhatsAppSync => "whatsapp_sync",
         }
     }
 
@@ -38,6 +42,8 @@ impl EventType {
             EventType::EntityExtraction => 5,
             EventType::CalendarRefresh => 6,
             EventType::ContactsSync => 6,
+            EventType::MessagesSync => 5,
+            EventType::WhatsAppSync => 5,
             EventType::MemoryDecay => 8,
         }
     }
@@ -52,6 +58,8 @@ impl EventType {
             EventType::CalendarRefresh => 3,
             EventType::MemoryDecay => 2,
             EventType::ContactsSync => 2,
+            EventType::MessagesSync => 3,
+            EventType::WhatsAppSync => 3,
         }
     }
 }
@@ -68,6 +76,8 @@ impl std::str::FromStr for EventType {
             "needs_reauth" => Ok(EventType::NeedsReauth),
             "agent_run" => Ok(EventType::AgentRun),
             "contacts_sync" => Ok(EventType::ContactsSync),
+            "messages_sync" => Ok(EventType::MessagesSync),
+            "whatsapp_sync" => Ok(EventType::WhatsAppSync),
             _ => Err(format!("unknown event type: {}", s)),
         }
     }
@@ -106,6 +116,13 @@ pub enum EventPayload {
         context: Option<String>,
     },
     ContactsSync {
+        force: bool,
+    },
+    MessagesSync {
+        force: bool,
+    },
+    WhatsAppSync {
+        export_path: Option<String>,
         force: bool,
     },
 }

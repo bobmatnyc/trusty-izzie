@@ -154,6 +154,21 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
             EventPayload::ContactsSync { force: false },
             now,
         )?;
+        seed_if_absent(
+            sqlite,
+            EventType::MessagesSync,
+            EventPayload::MessagesSync { force: false },
+            now,
+        )?;
+        seed_if_absent(
+            sqlite,
+            EventType::WhatsAppSync,
+            EventPayload::WhatsAppSync {
+                export_path: None,
+                force: false,
+            },
+            now,
+        )?;
     }
 
     let agents_dir = std::path::PathBuf::from(&config.agents.agents_dir);

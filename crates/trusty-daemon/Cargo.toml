@@ -34,3 +34,4 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 clap = { workspace = true }
+rusqlite = { workspace = true }
