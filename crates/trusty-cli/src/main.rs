@@ -15,6 +15,8 @@ use trusty_chat::engine::ChatEngine;
 use trusty_chat::session::SessionManager;
 use trusty_core::{init_logging, load_config};
 use trusty_email::auth::{generate_pkce_pair, GoogleAuthClient};
+use trusty_embeddings::{Embedder, EmbeddingModel};
+use trusty_memory::{MemoryRecaller, MemoryStore};
 use trusty_models::config::AppConfig;
 use trusty_models::entity::EntityType;
 use trusty_models::memory::MemoryCategory;
@@ -395,8 +397,19 @@ async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
         }
     };
 
-    let store = Store::open(&data_dir(&config), INSTANCE_ID).await?;
-    let assembler = ContextAssembler::new(5, 10).with_lance(Arc::clone(&store.lance));
+    let store = Arc::new(Store::open(&data_dir(&config), INSTANCE_ID).await?);
+    let embedder = Arc::new(
+        Embedder::new(EmbeddingModel::AllMiniLmL6V2)
+            .map_err(|e| anyhow::anyhow!("failed to init embedder: {e}"))?,
+    );
+    let memory_recaller = Arc::new(MemoryRecaller::new(
+        Arc::clone(&store),
+        Arc::clone(&embedder),
+    ));
+    let memory_store = Arc::new(MemoryStore::new(Arc::clone(&store), Arc::clone(&embedder)));
+    let assembler = ContextAssembler::new(5, 10)
+        .with_lance(Arc::clone(&store.lance))
+        .with_memory_recaller(memory_recaller);
 
     let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
     let engine = ChatEngine::new_with_context(
@@ -414,14 +427,31 @@ async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
     let duration_ms = t0.elapsed().as_millis() as u64;
     let reply_preview = preview(&response.reply, 120);
 
-    if dry_run {
+    let memories_saved = if dry_run {
         println!("\n[TEST MODE — read-only, nothing will be saved]\n");
-        // memories_saved is 0 in dry_run (saving is skipped)
         println!("Would save 0 memories:");
+        0usize
     } else {
+        let count = response.memories_to_save.len();
+        for mem in response.memories_to_save {
+            if let Err(e) = memory_store
+                .save(
+                    INSTANCE_ID,
+                    &mem.content,
+                    mem.category,
+                    mem.related_entities,
+                    mem.importance,
+                    None,
+                )
+                .await
+            {
+                eprintln!("Failed to save memory: {e}");
+            }
+        }
         session_manager.save(&session).await?;
         sqlite.set_config(SESSION_KEY, &session.id.to_string())?;
-    }
+        count
+    };
 
     let log_path = data_dir(&config).join("interactions.jsonl");
     let entry = InteractionLog {
@@ -432,7 +462,7 @@ async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
         reply_preview: Some(reply_preview),
         tokens: None,
         duration_ms,
-        memories_saved: Some(0),
+        memories_saved: Some(memories_saved),
         query: None,
         result_count: None,
         dry_run,

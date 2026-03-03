@@ -7496,6 +7496,7 @@ dependencies = [
  "trusty-chat",
  "trusty-core",
  "trusty-email",
+ "trusty-embeddings",
  "trusty-memory",
  "trusty-models",
  "trusty-store",
@@ -7692,7 +7693,9 @@ dependencies = [
  "trusty-chat",
  "trusty-core",
  "trusty-email",
+ "trusty-embeddings",
  "trusty-extractor",
+ "trusty-memory",
  "trusty-models",
  "trusty-store",
 ]

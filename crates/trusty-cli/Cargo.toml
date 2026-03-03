@@ -16,6 +16,7 @@ trusty-core = { path = "../trusty-core" }
 trusty-chat = { path = "../trusty-chat" }
 trusty-store = { path = "../trusty-store" }
 trusty-memory = { path = "../trusty-memory" }
+trusty-embeddings = { path = "../trusty-embeddings" }
 
 clap = { workspace = true }
 interprocess = { workspace = true }

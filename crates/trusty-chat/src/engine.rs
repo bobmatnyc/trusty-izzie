@@ -619,6 +619,9 @@ impl ChatEngine {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str) -> String {
+    let user_email =
+        std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+    let user_name = std::env::var("TRUSTY_USER_NAME").unwrap_or_else(|_| "Masa".to_string());
     let context_section = if context.is_empty() {
         String::new()
     } else {
@@ -627,7 +630,14 @@ fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str) -> String {
     format!(
         r#"You are trusty-izzie, a personal AI assistant with deep knowledge of the user's professional relationships and work context. You run locally on the user's machine.
 
-Today is {}. Current time: {}.{context_section}
+Today is {}. Current time: {}.
+
+## About Your User
+- **Name**: {user_name}
+- **Email**: {user_email}
+- **Timezone**: America/New_York (EDT, UTC-5)
+- You are their personal assistant. Address them by name when appropriate. When they ask who they are or about themselves, use this information.
+{context_section}
 
 ## My Deployment
 

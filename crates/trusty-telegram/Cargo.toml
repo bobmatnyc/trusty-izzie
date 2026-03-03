@@ -17,6 +17,8 @@ trusty-store = { path = "../trusty-store" }
 trusty-chat = { path = "../trusty-chat" }
 trusty-extractor = { path = "../trusty-extractor" }
 trusty-email = { path = "../trusty-email" }
+trusty-memory = { path = "../trusty-memory" }
+trusty-embeddings = { path = "../trusty-embeddings" }
 
 teloxide = { workspace = true }
 axum = { workspace = true }

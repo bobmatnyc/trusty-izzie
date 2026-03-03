@@ -36,7 +36,9 @@ use tracing::{error, info, warn};
 
 use trusty_chat::{context::ContextAssembler, engine::ChatEngine, session::SessionManager};
 use trusty_email::auth::{generate_pkce_pair, GoogleAuthClient};
+use trusty_embeddings::{Embedder, EmbeddingModel};
 use trusty_extractor::{EntityExtractor, ExtractorConfig, UserContext};
+use trusty_memory::{MemoryRecaller, MemoryStore};
 use trusty_store::sqlite::SqliteStore;
 use trusty_store::Store;
 
@@ -230,6 +232,7 @@ struct WebhookState {
     user_context: UserContext,
     min_occurrences: u32,
     gdrive_token: Option<String>,
+    memory_store: Arc<MemoryStore>,
 }
 
 async fn health_handler() -> StatusCode {
@@ -581,6 +584,8 @@ async fn webhook_handler(
     let min_occ = state.min_occurrences;
     let gdrive_token = state.gdrive_token.clone();
     let text_clone = text.clone();
+    let memory_store = Arc::clone(&state.memory_store);
+    let memory_user_id = state.user_context.user_id.clone();
 
     tokio::spawn(async move {
         let session_key = format!("tg_{chat_id}");
@@ -614,6 +619,28 @@ async fn webhook_handler(
                     None,
                 ) {
                     warn!("Failed to log outbound telegram message: {e}");
+                }
+                if !response.memories_to_save.is_empty() {
+                    let mem_store = Arc::clone(&memory_store);
+                    let user_id = memory_user_id.clone();
+                    let memories = response.memories_to_save.clone();
+                    tokio::spawn(async move {
+                        for mem in memories {
+                            if let Err(e) = mem_store
+                                .save(
+                                    &user_id,
+                                    &mem.content,
+                                    mem.category,
+                                    mem.related_entities,
+                                    mem.importance,
+                                    None,
+                                )
+                                .await
+                            {
+                                warn!("Failed to save memory: {e}");
+                            }
+                        }
+                    });
                 }
             }
             Err(e) => {
@@ -769,6 +796,7 @@ async fn run_webhook(
     user_context: UserContext,
     min_occurrences: u32,
     gdrive_token: Option<String>,
+    memory_store: Arc<MemoryStore>,
 ) -> Result<()> {
     // Register webhook with Telegram.
     api_set_webhook(&bot_token, &webhook_url).await?;
@@ -783,6 +811,7 @@ async fn run_webhook(
         user_context,
         min_occurrences,
         gdrive_token,
+        memory_store,
     });
 
     let app = Router::new()
@@ -919,7 +948,19 @@ async fn main() -> Result<()> {
 
             const INSTANCE_ID: &str = "42a923e9bd673e38";
             let store = Arc::new(Store::open(&data_dir, INSTANCE_ID).await?);
-            let assembler = ContextAssembler::new(5, 10).with_lance(Arc::clone(&store.lance));
+            let embedder = Arc::new(
+                Embedder::new(EmbeddingModel::AllMiniLmL6V2)
+                    .map_err(|e| anyhow!("failed to init embedder: {e}"))?,
+            );
+            let memory_recaller = Arc::new(MemoryRecaller::new(
+                Arc::clone(&store),
+                Arc::clone(&embedder),
+            ));
+            let memory_store =
+                Arc::new(MemoryStore::new(Arc::clone(&store), Arc::clone(&embedder)));
+            let assembler = ContextAssembler::new(5, 10)
+                .with_lance(Arc::clone(&store.lance))
+                .with_memory_recaller(memory_recaller);
 
             let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
 
@@ -1067,6 +1108,7 @@ async fn main() -> Result<()> {
                     user_context,
                     min_occurrences,
                     gdrive_token,
+                    memory_store,
                 )
                 .await?;
             }
