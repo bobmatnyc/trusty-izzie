@@ -157,25 +157,189 @@ async fn api_delete_webhook(token: &str) -> Result<()> {
     Ok(())
 }
 
-/// Send a plain-text reply via the Telegram Bot API directly (no teloxide HTML issues).
-async fn send_reply(token: &str, chat_id: i64, text: &str) -> Result<()> {
-    let endpoint = format!("https://api.telegram.org/bot{token}/sendMessage");
-    let client = reqwest::Client::new();
-    let resp: serde_json::Value = client
+/// Send a chat action (e.g. "typing"). Fire-and-forget — never fails the caller.
+async fn send_chat_action(token: &str, chat_id: i64, action: &str) {
+    let endpoint = format!("https://api.telegram.org/bot{token}/sendChatAction");
+    let _ = reqwest::Client::new()
         .post(&endpoint)
-        .json(&serde_json::json!({
-            "chat_id": chat_id,
-            "text": text,
-        }))
+        .json(&serde_json::json!({"chat_id": chat_id, "action": action}))
+        .send()
+        .await;
+}
+
+/// Send a message. Returns the Telegram message_id for later editing.
+/// Uses a two-attempt approach: try with parse_mode first, then plain text on 400.
+async fn send_message(
+    token: &str,
+    chat_id: i64,
+    text: &str,
+    reply_to_message_id: Option<i64>,
+    parse_mode: &str,
+) -> Result<i64> {
+    let endpoint = format!("https://api.telegram.org/bot{token}/sendMessage");
+    let mut body = serde_json::json!({
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": true,
+    });
+    if !parse_mode.is_empty() {
+        body["parse_mode"] = serde_json::Value::String(parse_mode.to_string());
+    }
+    if let Some(rid) = reply_to_message_id {
+        body["reply_to_message_id"] = serde_json::Value::Number(rid.into());
+    }
+    let resp: serde_json::Value = reqwest::Client::new()
+        .post(&endpoint)
+        .json(&body)
         .send()
         .await?
         .json()
         .await?;
     if !resp["ok"].as_bool().unwrap_or(false) {
-        let desc = resp["description"].as_str().unwrap_or("unknown error");
-        error!("sendMessage failed: {desc}");
+        // If parse_mode failed with a 400, retry as plain text.
+        if !parse_mode.is_empty() && resp["error_code"].as_i64() == Some(400) {
+            let mut plain_body = serde_json::json!({
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": true,
+            });
+            if let Some(rid) = reply_to_message_id {
+                plain_body["reply_to_message_id"] = serde_json::Value::Number(rid.into());
+            }
+            let plain_resp: serde_json::Value = reqwest::Client::new()
+                .post(&endpoint)
+                .json(&plain_body)
+                .send()
+                .await?
+                .json()
+                .await?;
+            if !plain_resp["ok"].as_bool().unwrap_or(false) {
+                let desc = plain_resp["description"].as_str().unwrap_or("unknown");
+                return Err(anyhow::anyhow!("sendMessage failed: {desc}"));
+            }
+            return Ok(plain_resp["result"]["message_id"].as_i64().unwrap_or(0));
+        }
+        let desc = resp["description"].as_str().unwrap_or("unknown");
+        return Err(anyhow::anyhow!("sendMessage failed: {desc}"));
+    }
+    Ok(resp["result"]["message_id"].as_i64().unwrap_or(0))
+}
+
+/// Edit an existing message (for progress updates -> final reply).
+async fn edit_message_text(
+    token: &str,
+    chat_id: i64,
+    message_id: i64,
+    text: &str,
+    parse_mode: &str,
+) -> Result<()> {
+    let endpoint = format!("https://api.telegram.org/bot{token}/editMessageText");
+    let mut body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "disable_web_page_preview": true,
+    });
+    if !parse_mode.is_empty() {
+        body["parse_mode"] = serde_json::Value::String(parse_mode.to_string());
+    }
+    let resp: serde_json::Value = reqwest::Client::new()
+        .post(&endpoint)
+        .json(&body)
+        .send()
+        .await?
+        .json()
+        .await?;
+    if !resp["ok"].as_bool().unwrap_or(false) {
+        // If parse fails, retry plain.
+        if !parse_mode.is_empty() && resp["error_code"].as_i64() == Some(400) {
+            let plain_body = serde_json::json!({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "disable_web_page_preview": true,
+            });
+            let _ = reqwest::Client::new()
+                .post(&endpoint)
+                .json(&plain_body)
+                .send()
+                .await;
+            return Ok(());
+        }
+        let desc = resp["description"].as_str().unwrap_or("unknown");
+        warn!("editMessageText failed: {desc}");
     }
     Ok(())
+}
+
+/// Delete a message (e.g. remove progress placeholder).
+async fn delete_message(token: &str, chat_id: i64, message_id: i64) {
+    let endpoint = format!("https://api.telegram.org/bot{token}/deleteMessage");
+    let _ = reqwest::Client::new()
+        .post(&endpoint)
+        .json(&serde_json::json!({"chat_id": chat_id, "message_id": message_id}))
+        .send()
+        .await;
+}
+
+/// Split text into chunks <= max_len bytes, breaking on paragraph boundaries where possible.
+fn chunk_text(text: &str, max_len: usize) -> Vec<String> {
+    if text.len() <= max_len {
+        return vec![text.to_string()];
+    }
+    let mut chunks = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        if remaining.len() <= max_len {
+            chunks.push(remaining.to_string());
+            break;
+        }
+        let window = &remaining[..max_len];
+        let split_at = window
+            .rfind("\n\n")
+            .or_else(|| window.rfind('\n'))
+            .or_else(|| window.rfind(". "))
+            .unwrap_or(max_len);
+        let (chunk, rest) = remaining.split_at(split_at);
+        chunks.push(chunk.trim_end().to_string());
+        remaining = rest.trim_start();
+    }
+    chunks
+}
+
+/// Send a (potentially long) reply, splitting into multiple messages if needed.
+/// Uses HTML parse_mode; falls back to plain text if HTML parse fails.
+/// Returns the message_id of the LAST sent message.
+async fn send_reply_smart(
+    token: &str,
+    chat_id: i64,
+    text: &str,
+    reply_to_message_id: Option<i64>,
+) -> Result<i64> {
+    const MAX: usize = 4000;
+    let chunks = chunk_text(text, MAX);
+    let mut last_id = 0i64;
+    for (i, chunk) in chunks.iter().enumerate() {
+        let rid = if i == 0 { reply_to_message_id } else { None };
+        last_id = send_message(token, chat_id, chunk, rid, "HTML")
+            .await
+            .unwrap_or(0);
+    }
+    Ok(last_id)
+}
+
+/// Backward-compat wrapper used for simple notifications (auth, errors, etc.)
+async fn send_reply(token: &str, chat_id: i64, text: &str) -> Result<()> {
+    send_message(token, chat_id, text, None, "")
+        .await
+        .map(|_| ())
+}
+
+/// Send a "progress" placeholder message; returns its message_id for later editing.
+async fn send_progress_message(token: &str, chat_id: i64, reply_to: i64) -> i64 {
+    send_message(token, chat_id, "⏳", Some(reply_to), "")
+        .await
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +354,7 @@ struct IncomingUpdate {
 
 #[derive(Deserialize)]
 struct IncomingMessage {
+    message_id: i64,
     chat: IncomingChat,
     from: Option<IncomingUser>,
     text: Option<String>,
@@ -212,6 +377,7 @@ struct IncomingChat {
 #[derive(Deserialize)]
 struct IncomingUser {
     id: i64,
+    username: Option<String>,
 }
 
 /// Query parameters for the Google OAuth callback route.
@@ -453,7 +619,13 @@ async fn webhook_handler(
     };
 
     let chat_id = msg.chat.id;
+    let message_id = msg.message_id;
     let sender_user_id = msg.from.as_ref().map(|u| u.id);
+    let sender_username = msg
+        .from
+        .as_ref()
+        .and_then(|u| u.username.as_deref())
+        .map(str::to_string);
 
     // Authorisation check
     if !state.allowed_users.is_empty() {
@@ -477,7 +649,7 @@ async fn webhook_handler(
         "inbound",
         chat_id,
         sender_user_id,
-        None,
+        sender_username.as_deref(),
         inbound_text,
         None,
     ) {
@@ -546,6 +718,15 @@ async fn webhook_handler(
         None => return StatusCode::OK,
     };
 
+    // 1. Show typing indicator immediately (fire-and-forget).
+    {
+        let tok_clone = state.bot_token.clone();
+        let chat_id_copy = chat_id;
+        tokio::spawn(async move {
+            send_chat_action(&tok_clone, chat_id_copy, "typing").await;
+        });
+    }
+
     // Handle /auth command — generate PKCE link and send to user.
     if text.trim() == "/auth" || text.trim().starts_with("/auth ") {
         let (verifier, challenge) = generate_pkce_pair();
@@ -588,6 +769,32 @@ async fn webhook_handler(
     let memory_user_id = state.user_context.user_id.clone();
 
     tokio::spawn(async move {
+        // 2. Send progress placeholder (threaded reply to original message).
+        let progress_id = send_progress_message(&token, chat_id, message_id).await;
+
+        // Handle /start and /help commands.
+        if text_clone.trim() == "/start" || text_clone.trim() == "/help" {
+            let help_text = concat!(
+                "👋 <b>Trusty Izzie</b> — your personal AI assistant\n\n",
+                "<b>Commands:</b>\n",
+                "/auth — Connect or reconnect a Google account\n",
+                "/help — Show this message\n\n",
+                "<b>What I can do:</b>\n",
+                "• Answer questions about your contacts and relationships\n",
+                "• Schedule reminders and events\n",
+                "• Manage email account syncing\n",
+                "• Run background research agents\n",
+                "• Check service status\n\n",
+                "Just chat naturally — no commands needed for most things."
+            );
+            if progress_id > 0 {
+                let _ = edit_message_text(&token, chat_id, progress_id, help_text, "HTML").await;
+            } else {
+                let _ = send_message(&token, chat_id, help_text, Some(message_id), "HTML").await;
+            }
+            return;
+        }
+
         let session_key = format!("tg_{chat_id}");
         let mut session = SessionManager::new_session(&session_key);
 
@@ -603,23 +810,58 @@ async fn webhook_handler(
             None => text_clone.clone(),
         };
 
+        // 6. Spawn typing heartbeat — refreshes "typing" every 4s until cancelled.
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let tok_hb = token.clone();
+            let chat_id_copy = chat_id;
+            tokio::spawn(async move {
+                let mut cancel_rx = cancel_rx;
+                loop {
+                    tokio::select! {
+                        _ = &mut cancel_rx => break,
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(4)) => {
+                            send_chat_action(&tok_hb, chat_id_copy, "typing").await;
+                        }
+                    }
+                }
+            });
+        }
+
+        // 3. Process LLM call.
         match engine.chat(&mut session, &text_clone).await {
             Ok(response) => {
+                // Stop heartbeat.
+                let _ = cancel_tx.send(());
+
                 info!(
                     memories = response.memories_to_save.len(),
                     "Chat turn complete"
                 );
-                let _ = send_reply(&token, chat_id, &response.reply).await;
-                if let Err(e) = sqlite_log.log_telegram_interaction(
-                    "outbound",
-                    chat_id,
-                    None,
-                    None,
-                    &response.reply,
-                    None,
-                ) {
+
+                let reply_text = &response.reply;
+                const MAX_EDIT: usize = 4000;
+
+                // 4. Edit placeholder with final reply, or delete + chunk-send if too long.
+                if progress_id > 0 {
+                    if reply_text.len() <= MAX_EDIT {
+                        let _ = edit_message_text(&token, chat_id, progress_id, reply_text, "HTML")
+                            .await;
+                    } else {
+                        delete_message(&token, chat_id, progress_id).await;
+                        let _ =
+                            send_reply_smart(&token, chat_id, reply_text, Some(message_id)).await;
+                    }
+                } else {
+                    let _ = send_reply_smart(&token, chat_id, reply_text, Some(message_id)).await;
+                }
+
+                if let Err(e) = sqlite_log
+                    .log_telegram_interaction("outbound", chat_id, None, None, reply_text, None)
+                {
                     warn!("Failed to log outbound telegram message: {e}");
                 }
+
                 if !response.memories_to_save.is_empty() {
                     let mem_store = Arc::clone(&memory_store);
                     let user_id = memory_user_id.clone();
@@ -644,8 +886,15 @@ async fn webhook_handler(
                 }
             }
             Err(e) => {
+                // Stop heartbeat.
+                let _ = cancel_tx.send(());
                 error!("Chat error: {e}");
-                let _ = send_reply(&token, chat_id, "Sorry, I encountered an error.").await;
+                let err_text = "Sorry, I encountered an error processing your message.";
+                if progress_id > 0 {
+                    let _ = edit_message_text(&token, chat_id, progress_id, err_text, "").await;
+                } else {
+                    let _ = send_reply(&token, chat_id, err_text).await;
+                }
             }
         }
 
