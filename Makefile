@@ -64,6 +64,9 @@ help:
 	@echo "Testing:"
 	@echo "  make test-features       Test all CLI features against real DB (dry-run)"
 	@echo "  make test-features-chat  Same + live chat (uses OpenRouter tokens)"
+	@echo "  make test-e2e            E2E test suite — API + CLI (API must be running)"
+	@echo "  make test-e2e-all        Same + destructive tests (creates real tasks, ~\$$0.001)"
+	@echo "  make test-e2e-json       E2E tests with JSON summary output"
 	@echo ""
 	@echo "Deployment:"
 	@echo "  make install        Build release + install binaries + load launchd services"
@@ -197,6 +200,20 @@ test-features:
 .PHONY: test-features-chat
 test-features-chat:
 	@bash scripts/test-features.sh --chat
+
+# ── E2E Tests ─────────────────────────────────────────────────────────────────
+
+.PHONY: test-e2e
+test-e2e:
+	@bash scripts/e2e-test.sh
+
+.PHONY: test-e2e-all
+test-e2e-all:
+	@bash scripts/e2e-test.sh --destructive
+
+.PHONY: test-e2e-json
+test-e2e-json:
+	@bash scripts/e2e-test.sh --json
 
 # ── Dev tools ────────────────────────────────────────────────────────────────
 
