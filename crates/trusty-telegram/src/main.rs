@@ -843,7 +843,12 @@ async fn webhook_handler(
                 const MAX_EDIT: usize = 4000;
 
                 // 4. Edit placeholder with final reply, or delete + chunk-send if too long.
-                if progress_id > 0 {
+                if reply_text.trim().is_empty() {
+                    // LLM returned no text — delete the progress placeholder silently.
+                    if progress_id > 0 {
+                        delete_message(&token, chat_id, progress_id).await;
+                    }
+                } else if progress_id > 0 {
                     if reply_text.len() <= MAX_EDIT {
                         let _ = edit_message_text(&token, chat_id, progress_id, reply_text, "HTML")
                             .await;

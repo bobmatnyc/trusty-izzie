@@ -992,6 +992,8 @@ CRITICAL OUTPUT FORMAT: Your ENTIRE response must be a single raw JSON object. O
 Required format (output this and nothing else):
 {{"reply":"your response to the user (markdown allowed)","memoriesToSave":[],"referencedEntities":[]}}
 
+IMPORTANT: The "reply" field must ALWAYS contain a non-empty response. Even for declarative statements or information shared by the user, you must acknowledge receipt — e.g. "Got it, noted!" or "Thanks, I've made note of that." or a brief summary of what you understood. Never leave "reply" as an empty string.
+
 Be helpful, concise, and honest. Only include items in memoriesToSave if you learned something genuinely new and useful. Be selective — 0-1 memories per turn is typical."#,
         now.format("%A, %B %d, %Y"),
         now.format("%H:%M UTC"),
