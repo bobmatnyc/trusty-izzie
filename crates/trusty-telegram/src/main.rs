@@ -444,6 +444,7 @@ struct WebhookState {
     min_occurrences: u32,
     gdrive_token: Option<String>,
     memory_store: Arc<MemoryStore>,
+    session_manager: Arc<SessionManager>,
 }
 
 async fn health_handler() -> StatusCode {
@@ -845,6 +846,7 @@ async fn webhook_handler(
     let text_clone = text.clone();
     let memory_store = Arc::clone(&state.memory_store);
     let memory_user_id = state.user_context.user_id.clone();
+    let session_manager = Arc::clone(&state.session_manager);
 
     tokio::spawn(async move {
         // 2. No placeholder message — typing indicator in the header is sufficient.
@@ -873,8 +875,14 @@ async fn webhook_handler(
             return;
         }
 
-        let session_key = format!("tg_{chat_id}");
-        let mut session = SessionManager::new_session(&session_key);
+        // Derive a stable session UUID from chat_id so history persists across reboots.
+        // Negative chat_ids (groups) wrap around safely in u128.
+        let session_uuid = uuid::Uuid::from_u128(chat_id as u128);
+        let session_mgr = Arc::clone(&session_manager);
+        let mut session = session_mgr
+            .load_or_create(session_uuid, 40)
+            .await
+            .unwrap_or_else(|_| SessionManager::new_session(&format!("tg_{chat_id}")));
 
         // Check for Google Doc URL in the message text.
         let gdoc_text = if let Some(ref drive_token) = gdrive_token {
@@ -933,6 +941,15 @@ async fn webhook_handler(
                 {
                     warn!("Failed to log outbound telegram message: {e}");
                 }
+
+                // 5. Persist conversation session so history survives reboots.
+                let sm_save = Arc::clone(&session_mgr);
+                let session_to_save = session.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = sm_save.save(&session_to_save).await {
+                        warn!("Failed to save chat session: {e}");
+                    }
+                });
 
                 if !response.memories_to_save.is_empty() {
                     let mem_store = Arc::clone(&memory_store);
@@ -1175,6 +1192,7 @@ async fn run_webhook(
     // Register webhook with Telegram.
     api_set_webhook(&bot_token, &webhook_url).await?;
 
+    let session_manager = Arc::new(SessionManager::new(sqlite.clone()));
     let state = Arc::new(WebhookState {
         engine,
         allowed_users,
@@ -1186,6 +1204,7 @@ async fn run_webhook(
         min_occurrences,
         gdrive_token,
         memory_store,
+        session_manager,
     });
 
     let app = Router::new()

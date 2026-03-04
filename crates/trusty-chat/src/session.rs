@@ -33,6 +33,84 @@ impl SessionManager {
         }
     }
 
+    /// Load an existing session or create a new one with the given stable ID.
+    /// Only the most recent `msg_limit` messages are loaded to cap context size.
+    pub async fn load_or_create(&self, session_id: Uuid, msg_limit: usize) -> Result<ChatSession> {
+        let id_str = session_id.to_string();
+        let sqlite = self.sqlite.clone();
+
+        let session_row = tokio::task::spawn_blocking(move || sqlite.get_session(&id_str))
+            .await
+            .map_err(|e| anyhow::anyhow!("join error: {e}"))??;
+
+        let created_at = if let Some((_, _, ts)) = session_row {
+            chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(chrono::Utc::now)
+        } else {
+            // First time: create the session row and return an empty session.
+            let id_str2 = session_id.to_string();
+            let sqlite2 = self.sqlite.clone();
+            tokio::task::spawn_blocking(move || sqlite2.create_session(&id_str2, None))
+                .await
+                .map_err(|e| anyhow::anyhow!("join error: {e}"))??;
+            let now = chrono::Utc::now();
+            return Ok(ChatSession {
+                id: session_id,
+                user_id: String::new(),
+                title: None,
+                messages: vec![],
+                is_compressed: false,
+                created_at: now,
+                updated_at: now,
+            });
+        };
+
+        // Load the most recent messages only.
+        let id_str3 = session_id.to_string();
+        let sqlite3 = self.sqlite.clone();
+        let message_rows =
+            tokio::task::spawn_blocking(move || sqlite3.get_recent_messages(&id_str3, msg_limit))
+                .await
+                .map_err(|e| anyhow::anyhow!("join error: {e}"))??;
+
+        let mut messages = Vec::with_capacity(message_rows.len());
+        let mut updated_at = created_at;
+
+        for (msg_id, role_str, content, msg_ts) in message_rows {
+            let role = match role_str.as_str() {
+                "user" => MessageRole::User,
+                "assistant" => MessageRole::Assistant,
+                "tool" => MessageRole::Tool,
+                _ => continue,
+            };
+            let msg_created_at =
+                chrono::DateTime::from_timestamp(msg_ts, 0).unwrap_or_else(chrono::Utc::now);
+            if msg_created_at > updated_at {
+                updated_at = msg_created_at;
+            }
+            let msg_uuid = msg_id.parse::<Uuid>().unwrap_or_else(|_| Uuid::new_v4());
+            messages.push(ChatMessage {
+                id: msg_uuid,
+                session_id,
+                role,
+                content,
+                tool_name: None,
+                tool_result: None,
+                token_count: None,
+                created_at: msg_created_at,
+            });
+        }
+
+        Ok(ChatSession {
+            id: session_id,
+            user_id: String::new(),
+            title: None,
+            messages,
+            is_compressed: false,
+            created_at,
+            updated_at,
+        })
+    }
+
     /// Load an existing session by ID from SQLite.
     pub async fn load(&self, session_id: Uuid) -> Result<Option<ChatSession>> {
         let id_str = session_id.to_string();

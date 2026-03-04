@@ -443,6 +443,27 @@ impl SqliteStore {
 
     /// Get all messages for a session, ordered by created_at ASC.
     /// Returns `Vec<(id, role, content, created_at)>`.
+    /// Load the most recent `limit` messages for a session (chronological order).
+    pub fn get_recent_messages(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, String, i64)>> {
+        let conn = self.conn.lock().unwrap();
+        // Fetch newest N rows first, then reverse for chronological order.
+        let mut stmt = conn.prepare(
+            "SELECT id, role, content, created_at FROM chat_messages \
+             WHERE session_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id, limit as i64], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        let mut messages: Vec<(String, String, String, i64)> =
+            rows.filter_map(|r| r.ok()).collect();
+        messages.reverse(); // oldest first
+        Ok(messages)
+    }
+
     pub fn get_messages(&self, session_id: &str) -> Result<Vec<(String, String, String, i64)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
