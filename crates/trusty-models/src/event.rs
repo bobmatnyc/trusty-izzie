@@ -15,6 +15,13 @@ pub enum EventType {
     ContactsSync,
     MessagesSync,
     WhatsAppSync,
+    MorningBriefing,
+    EveningBriefing,
+    WeeklyDigest,
+    VipEmailCheck,
+    FollowUp,
+    RelationshipNudge,
+    WatchCheck,
 }
 
 impl EventType {
@@ -30,6 +37,13 @@ impl EventType {
             EventType::ContactsSync => "contacts_sync",
             EventType::MessagesSync => "messages_sync",
             EventType::WhatsAppSync => "whatsapp_sync",
+            EventType::MorningBriefing => "morning_briefing",
+            EventType::EveningBriefing => "evening_briefing",
+            EventType::WeeklyDigest => "weekly_digest",
+            EventType::VipEmailCheck => "vip_email_check",
+            EventType::FollowUp => "follow_up",
+            EventType::RelationshipNudge => "relationship_nudge",
+            EventType::WatchCheck => "watch_check",
         }
     }
 
@@ -37,13 +51,20 @@ impl EventType {
         match self {
             EventType::NeedsReauth => 1,
             EventType::Reminder => 2,
+            EventType::VipEmailCheck => 2,
             EventType::AgentRun => 3,
+            EventType::MorningBriefing => 3,
+            EventType::EveningBriefing => 3,
+            EventType::WeeklyDigest => 3,
+            EventType::FollowUp => 3,
             EventType::EmailSync => 4,
             EventType::EntityExtraction => 5,
-            EventType::CalendarRefresh => 6,
-            EventType::ContactsSync => 6,
             EventType::MessagesSync => 5,
             EventType::WhatsAppSync => 5,
+            EventType::CalendarRefresh => 6,
+            EventType::ContactsSync => 6,
+            EventType::RelationshipNudge => 4,
+            EventType::WatchCheck => 4,
             EventType::MemoryDecay => 8,
         }
     }
@@ -53,13 +74,20 @@ impl EventType {
             EventType::NeedsReauth => 1,
             EventType::Reminder => 1,
             EventType::AgentRun => 1,
+            EventType::MorningBriefing => 1,
+            EventType::EveningBriefing => 1,
+            EventType::WeeklyDigest => 1,
+            EventType::FollowUp => 1,
+            EventType::RelationshipNudge => 1,
+            EventType::WatchCheck => 1,
+            EventType::VipEmailCheck => 2,
             EventType::EmailSync => 3,
-            EventType::EntityExtraction => 5,
             EventType::CalendarRefresh => 3,
-            EventType::MemoryDecay => 2,
-            EventType::ContactsSync => 2,
             EventType::MessagesSync => 3,
             EventType::WhatsAppSync => 3,
+            EventType::MemoryDecay => 2,
+            EventType::ContactsSync => 2,
+            EventType::EntityExtraction => 5,
         }
     }
 }
@@ -78,6 +106,13 @@ impl std::str::FromStr for EventType {
             "contacts_sync" => Ok(EventType::ContactsSync),
             "messages_sync" => Ok(EventType::MessagesSync),
             "whatsapp_sync" => Ok(EventType::WhatsAppSync),
+            "morning_briefing" => Ok(EventType::MorningBriefing),
+            "evening_briefing" => Ok(EventType::EveningBriefing),
+            "weekly_digest" => Ok(EventType::WeeklyDigest),
+            "vip_email_check" => Ok(EventType::VipEmailCheck),
+            "follow_up" => Ok(EventType::FollowUp),
+            "relationship_nudge" => Ok(EventType::RelationshipNudge),
+            "watch_check" => Ok(EventType::WatchCheck),
             _ => Err(format!("unknown event type: {}", s)),
         }
     }
@@ -124,6 +159,25 @@ pub enum EventPayload {
     WhatsAppSync {
         export_path: Option<String>,
         force: bool,
+    },
+    MorningBriefing {},
+    EveningBriefing {},
+    WeeklyDigest {},
+    VipEmailCheck {
+        email: String,
+    },
+    FollowUp {
+        open_loop_id: String,
+        description: String,
+    },
+    RelationshipNudge {
+        email: String,
+        name: String,
+        last_contact_days: u32,
+    },
+    WatchCheck {
+        subscription_id: String,
+        topic: String,
     },
 }
 

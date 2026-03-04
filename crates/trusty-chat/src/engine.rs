@@ -147,6 +147,16 @@ impl ChatEngine {
             ToolName::SyncMessages => self.tool_sync_messages(),
             ToolName::SyncWhatsApp => self.tool_sync_whatsapp(input),
             ToolName::ExecuteShellCommand => self.tool_execute_shell_command(input),
+            ToolName::GetPreferences => self.tool_get_preferences(),
+            ToolName::SetPreference => self.tool_set_preference(input),
+            ToolName::AddVipContact => self.tool_add_vip_contact(input),
+            ToolName::RemoveVipContact => self.tool_remove_vip_contact(input),
+            ToolName::ListVipContacts => self.tool_list_vip_contacts(),
+            ToolName::AddWatchSubscription => self.tool_add_watch_subscription(input),
+            ToolName::RemoveWatchSubscription => self.tool_remove_watch_subscription(input),
+            ToolName::ListWatchSubscriptions => self.tool_list_watch_subscriptions(),
+            ToolName::ListOpenLoops => self.tool_list_open_loops(),
+            ToolName::DismissOpenLoop => self.tool_dismiss_open_loop(input),
             _ => Ok("Tool not yet implemented.".to_string()),
         }
     }
@@ -203,6 +213,25 @@ impl ChatEngine {
             EventType::WhatsAppSync => EventPayload::WhatsAppSync {
                 export_path: input["export_path"].as_str().map(|s| s.to_string()),
                 force: false,
+            },
+            EventType::MorningBriefing => EventPayload::MorningBriefing {},
+            EventType::EveningBriefing => EventPayload::EveningBriefing {},
+            EventType::WeeklyDigest => EventPayload::WeeklyDigest {},
+            EventType::VipEmailCheck => EventPayload::VipEmailCheck {
+                email: input["email"].as_str().unwrap_or("").to_string(),
+            },
+            EventType::FollowUp => EventPayload::FollowUp {
+                open_loop_id: input["open_loop_id"].as_str().unwrap_or("").to_string(),
+                description: input["description"].as_str().unwrap_or("").to_string(),
+            },
+            EventType::RelationshipNudge => EventPayload::RelationshipNudge {
+                email: input["email"].as_str().unwrap_or("").to_string(),
+                name: input["name"].as_str().unwrap_or("").to_string(),
+                last_contact_days: input["last_contact_days"].as_u64().unwrap_or(0) as u32,
+            },
+            EventType::WatchCheck => EventPayload::WatchCheck {
+                subscription_id: input["subscription_id"].as_str().unwrap_or("").to_string(),
+                topic: input["topic"].as_str().unwrap_or("").to_string(),
             },
         };
 
@@ -564,6 +593,173 @@ impl ChatEngine {
         }
     }
 
+    fn tool_get_preferences(&self) -> Result<String> {
+        let sqlite = self.sqlite_ref()?;
+        let stored = sqlite.list_all_prefs()?;
+        let defaults = [
+            ("morning_briefing_enabled", "true"),
+            ("evening_briefing_enabled", "true"),
+            ("weekly_digest_enabled", "true"),
+            ("relationship_nudge_enabled", "true"),
+            ("open_loop_followup_enabled", "true"),
+            ("watch_check_enabled", "true"),
+            ("morning_briefing_time", "08:00"),
+            ("evening_briefing_time", "18:00"),
+            ("relationship_nudge_days", "21"),
+            ("open_loop_followup_hours", "24"),
+        ];
+        let mut prefs = serde_json::Map::new();
+        for (k, default) in &defaults {
+            let val = stored
+                .iter()
+                .find(|(sk, _)| sk == k)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or(default);
+            prefs.insert(k.to_string(), serde_json::Value::String(val.to_string()));
+        }
+        serde_json::to_string(&prefs).context("failed to serialize prefs")
+    }
+
+    fn tool_set_preference(&self, input: &serde_json::Value) -> Result<String> {
+        let key = input["key"].as_str().unwrap_or("").trim();
+        let value = input["value"].as_str().unwrap_or("").trim();
+        if key.is_empty() {
+            return Ok("Error: key is required".to_string());
+        }
+        let valid_keys = [
+            "morning_briefing_enabled",
+            "evening_briefing_enabled",
+            "weekly_digest_enabled",
+            "relationship_nudge_enabled",
+            "open_loop_followup_enabled",
+            "watch_check_enabled",
+            "morning_briefing_time",
+            "evening_briefing_time",
+            "relationship_nudge_days",
+            "open_loop_followup_hours",
+        ];
+        if !valid_keys.contains(&key) {
+            return Ok(format!(
+                "Error: unknown preference key '{}'. Valid keys: {}",
+                key,
+                valid_keys.join(", ")
+            ));
+        }
+        self.sqlite_ref()?.set_pref(key, value)?;
+        Ok(format!("Preference '{}' set to '{}'.", key, value))
+    }
+
+    fn tool_add_vip_contact(&self, input: &serde_json::Value) -> Result<String> {
+        let email = input["email"].as_str().unwrap_or("").trim();
+        if email.is_empty() {
+            return Ok("Error: email is required".to_string());
+        }
+        let name = input["name"]
+            .as_str()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+        self.sqlite_ref()?.upsert_vip_contact(email, name)?;
+        Ok(format!("VIP contact '{}' added.", email))
+    }
+
+    fn tool_remove_vip_contact(&self, input: &serde_json::Value) -> Result<String> {
+        let email = input["email"].as_str().unwrap_or("").trim();
+        if email.is_empty() {
+            return Ok("Error: email is required".to_string());
+        }
+        self.sqlite_ref()?.remove_vip_contact(email)?;
+        Ok(format!("VIP contact '{}' removed.", email))
+    }
+
+    fn tool_list_vip_contacts(&self) -> Result<String> {
+        let contacts = self.sqlite_ref()?.list_vip_contacts()?;
+        if contacts.is_empty() {
+            return Ok("No VIP contacts configured.".to_string());
+        }
+        let json: Vec<serde_json::Value> = contacts
+            .into_iter()
+            .map(|(email, name)| serde_json::json!({"email": email, "name": name}))
+            .collect();
+        serde_json::to_string(&json).context("failed to serialize contacts")
+    }
+
+    fn tool_add_watch_subscription(&self, input: &serde_json::Value) -> Result<String> {
+        let topic = input["topic"].as_str().unwrap_or("").trim();
+        if topic.is_empty() {
+            return Ok("Error: topic is required".to_string());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let sqlite = self.sqlite_ref()?;
+        sqlite.add_watch_subscription(&id, topic)?;
+        // Enqueue an initial WatchCheck in 1 hour.
+        let check_at = chrono::Utc::now().timestamp() + 3600;
+        sqlite.enqueue_event(
+            &EventType::WatchCheck,
+            &EventPayload::WatchCheck {
+                subscription_id: id.clone(),
+                topic: topic.to_string(),
+            },
+            check_at,
+            EventType::WatchCheck.default_priority(),
+            EventType::WatchCheck.default_max_retries(),
+            "chat",
+            None,
+        )?;
+        Ok(format!(
+            "Watch subscription added for '{}' (id: {}). First check in ~1 hour.",
+            topic, id
+        ))
+    }
+
+    fn tool_remove_watch_subscription(&self, input: &serde_json::Value) -> Result<String> {
+        let id = input["id"].as_str().unwrap_or("").trim();
+        if id.is_empty() {
+            return Ok("Error: id is required".to_string());
+        }
+        self.sqlite_ref()?.remove_watch_subscription(id)?;
+        Ok(format!("Watch subscription '{}' removed.", id))
+    }
+
+    fn tool_list_watch_subscriptions(&self) -> Result<String> {
+        let subs = self.sqlite_ref()?.list_watch_subscriptions()?;
+        if subs.is_empty() {
+            return Ok("No active watch subscriptions.".to_string());
+        }
+        let json: Vec<serde_json::Value> = subs
+            .into_iter()
+            .map(|(id, topic)| serde_json::json!({"id": id, "topic": topic}))
+            .collect();
+        serde_json::to_string(&json).context("failed to serialize subscriptions")
+    }
+
+    fn tool_list_open_loops(&self) -> Result<String> {
+        let loops = self.sqlite_ref()?.list_open_loops(Some("open"))?;
+        if loops.is_empty() {
+            return Ok("No open loops.".to_string());
+        }
+        let json: Vec<serde_json::Value> = loops
+            .into_iter()
+            .map(|l| {
+                serde_json::json!({
+                    "id": l.id,
+                    "description": l.description,
+                    "follow_up_at": l.follow_up_at,
+                    "status": l.status,
+                })
+            })
+            .collect();
+        serde_json::to_string(&json).context("failed to serialize open loops")
+    }
+
+    fn tool_dismiss_open_loop(&self, input: &serde_json::Value) -> Result<String> {
+        let id = input["id"].as_str().unwrap_or("").trim();
+        if id.is_empty() {
+            return Ok("Error: id is required".to_string());
+        }
+        self.sqlite_ref()?.close_open_loop(id, "dismissed")?;
+        Ok(format!("Open loop '{}' dismissed.", id))
+    }
+
     fn tool_execute_shell_command(&self, input: &serde_json::Value) -> Result<String> {
         let command = input["command"].as_str().unwrap_or("").trim();
         if command.is_empty() {
@@ -767,6 +963,20 @@ I learn from email sent from multiple Google accounts. Use `list_accounts` to se
 - `remove_account` — deactivate a secondary Google account (stops syncing it)
 - `sync_contacts` — queue a macOS AddressBook contacts sync
 - `execute_shell_command` — run a bash shell command on this Mac and return stdout/stderr
+- `get_preferences` — view current proactive feature settings
+- `set_preference` — toggle features on/off or adjust timing
+- `add_vip_contact` / `remove_vip_contact` / `list_vip_contacts` — manage priority contacts
+- `add_watch_subscription` / `remove_watch_subscription` / `list_watch_subscriptions` — monitor topics
+- `list_open_loops` — see pending follow-ups
+- `dismiss_open_loop` — dismiss a follow-up reminder
+
+## Proactive Features
+I proactively send you briefings and updates. You can customize these:
+- Use `get_preferences` to see current settings
+- Use `set_preference` to toggle features on/off or adjust timing
+- Use `add_vip_contact` / `list_vip_contacts` to manage priority contacts
+- Use `add_watch_subscription` to monitor topics
+- Use `list_open_loops` to see pending follow-ups
 
 I do NOT have `read_file`, `write_file`, or `list_directory` tools. To access the file system, use `execute_shell_command` with commands like `ls`, `cat`, etc.
 

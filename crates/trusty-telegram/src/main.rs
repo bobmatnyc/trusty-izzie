@@ -917,6 +917,59 @@ async fn webhook_handler(
                 }
             }
         }
+
+        // Detect open-loop signals in the user's message and schedule follow-up.
+        {
+            let lower = text_clone.to_lowercase();
+            let is_open_loop = lower.contains("will do")
+                || lower.contains("i'll")
+                || lower.contains("remind me")
+                || lower.contains("follow up")
+                || lower.contains("don't let me forget")
+                || lower.contains("todo")
+                || lower.contains("need to")
+                || lower.contains("should do");
+
+            if is_open_loop {
+                let followup_hours = sqlite_log
+                    .get_pref("open_loop_followup_hours")
+                    .unwrap_or(None)
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(24);
+                let followup_enabled = sqlite_log
+                    .get_pref("open_loop_followup_enabled")
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "true".to_string())
+                    == "true";
+
+                if followup_enabled {
+                    let follow_up_at = chrono::Utc::now().timestamp() + followup_hours * 3600;
+                    let desc = text_clone.chars().take(200).collect::<String>();
+                    let loop_id = uuid::Uuid::new_v4().to_string();
+                    let sqlite_clone = sqlite_log.clone();
+                    let lid = loop_id.clone();
+                    let desc_clone = desc.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let _ =
+                            sqlite_clone.create_open_loop(&lid, &desc_clone, None, follow_up_at);
+                        let _ = sqlite_clone.enqueue_event(
+                            &trusty_models::EventType::FollowUp,
+                            &trusty_models::EventPayload::FollowUp {
+                                open_loop_id: lid.clone(),
+                                description: desc_clone,
+                            },
+                            follow_up_at,
+                            3,
+                            1,
+                            "system",
+                            None,
+                        );
+                    })
+                    .await
+                    .ok();
+                }
+            }
+        }
     });
 
     StatusCode::OK

@@ -45,3 +45,14 @@ pub struct OAuthToken {
     pub refresh_token: Option<String>,
     pub expires_at: Option<i64>,
 }
+
+/// A row from the `open_loops` table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OpenLoopRow {
+    pub id: String,
+    pub description: String,
+    pub context: Option<String>,
+    pub created_at: i64,
+    pub follow_up_at: i64,
+    pub status: String,
+}

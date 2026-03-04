@@ -57,6 +57,26 @@ pub enum ToolName {
     SyncWhatsApp,
     /// Execute a bash shell command and return stdout/stderr.
     ExecuteShellCommand,
+    /// Get user preferences for proactive features.
+    GetPreferences,
+    /// Set a user preference (key/value).
+    SetPreference,
+    /// Add a VIP contact (always notified of emails from them).
+    AddVipContact,
+    /// Remove a VIP contact.
+    RemoveVipContact,
+    /// List all VIP contacts.
+    ListVipContacts,
+    /// Add a topic watch subscription.
+    AddWatchSubscription,
+    /// Remove a watch subscription.
+    RemoveWatchSubscription,
+    /// List all watch subscriptions.
+    ListWatchSubscriptions,
+    /// List open loops (pending follow-ups).
+    ListOpenLoops,
+    /// Dismiss an open loop.
+    DismissOpenLoop,
 }
 
 /// A parsed tool call request from the LLM.

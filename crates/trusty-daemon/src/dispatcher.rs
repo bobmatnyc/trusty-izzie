@@ -8,8 +8,10 @@ use std::path::PathBuf;
 
 use crate::handlers::{
     AgentRunHandler, CalendarRefreshHandler, ContactsSyncHandler, DispatchResult, EmailSyncHandler,
-    EntityExtractionHandler, EventHandler, MemoryDecayHandler, MessagesSyncHandler,
-    NeedsReauthHandler, ReminderHandler, WhatsAppSyncHandler,
+    EntityExtractionHandler, EveningBriefingHandler, EventHandler, FollowUpHandler,
+    MemoryDecayHandler, MessagesSyncHandler, MorningBriefingHandler, NeedsReauthHandler,
+    RelationshipNudgeHandler, ReminderHandler, VipEmailCheckHandler, WatchCheckHandler,
+    WeeklyDigestHandler, WhatsAppSyncHandler,
 };
 
 pub struct EventDispatcher {
@@ -67,9 +69,25 @@ impl EventDispatcher {
             Box::new(CalendarRefreshHandler),
             Box::new(AgentRunHandler::new(
                 agents_dir,
-                openrouter_base,
-                openrouter_api_key,
+                openrouter_base.clone(),
+                openrouter_api_key.clone(),
             )),
+            Box::new(MorningBriefingHandler::new(
+                openrouter_base.clone(),
+                openrouter_api_key.clone(),
+            )),
+            Box::new(EveningBriefingHandler::new(
+                openrouter_base.clone(),
+                openrouter_api_key.clone(),
+            )),
+            Box::new(WeeklyDigestHandler::new(
+                openrouter_base.clone(),
+                openrouter_api_key.clone(),
+            )),
+            Box::new(WatchCheckHandler::new(openrouter_base, openrouter_api_key)),
+            Box::new(FollowUpHandler),
+            Box::new(RelationshipNudgeHandler),
+            Box::new(VipEmailCheckHandler),
         ]
     }
 

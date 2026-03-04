@@ -7699,6 +7699,7 @@ dependencies = [
  "trusty-memory",
  "trusty-models",
  "trusty-store",
+ "uuid",
 ]
 
 [[package]]

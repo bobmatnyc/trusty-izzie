@@ -8,7 +8,11 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 use trusty_core::{init_logging, load_config};
-use trusty_daemon::{ipc::IpcServer, DaemonLoop, EventDispatcher};
+use trusty_daemon::{
+    ipc::IpcServer,
+    scheduling::{next_time_of_day_ts, next_weekly_ts},
+    DaemonLoop, EventDispatcher,
+};
 use trusty_models::config::AppConfig;
 use trusty_models::{EventPayload, EventType};
 use trusty_store::{SqliteStore, Store};
@@ -168,6 +172,26 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
                 force: false,
             },
             now,
+        )?;
+
+        // Proactive communications — seeded at startup (idempotent).
+        seed_if_absent(
+            sqlite,
+            EventType::MorningBriefing,
+            EventPayload::MorningBriefing {},
+            next_time_of_day_ts(8, 0),
+        )?;
+        seed_if_absent(
+            sqlite,
+            EventType::EveningBriefing,
+            EventPayload::EveningBriefing {},
+            next_time_of_day_ts(18, 0),
+        )?;
+        seed_if_absent(
+            sqlite,
+            EventType::WeeklyDigest,
+            EventPayload::WeeklyDigest {},
+            next_weekly_ts(chrono::Weekday::Mon, 9, 0),
         )?;
     }
 

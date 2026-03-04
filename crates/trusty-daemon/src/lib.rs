@@ -7,6 +7,8 @@ pub mod dispatcher;
 pub mod handlers;
 pub mod ipc;
 pub mod loop_runner;
+pub mod scheduling;
+pub mod telegram_push;
 
 pub use dispatcher::EventDispatcher;
 pub use loop_runner::DaemonLoop;

@@ -11,7 +11,7 @@ pub mod entity;
 pub mod event;
 pub mod memory;
 
-pub use agent::{Account, AgentTask, OAuthToken};
+pub use agent::{Account, AgentTask, OAuthToken, OpenLoopRow};
 pub use chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
 pub use config::{AppConfig, DaemonConfig, ExtractionConfig, OpenRouterConfig, StorageConfig};
 pub use email::{EmailMessage, GmailHistoryCursor};

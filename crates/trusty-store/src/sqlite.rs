@@ -157,6 +157,34 @@ impl SqliteStore {
             );
             CREATE INDEX IF NOT EXISTS idx_tg_logs_chat ON telegram_logs (chat_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_tg_logs_created ON telegram_logs (created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS user_prefs (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS vip_contacts (
+                email TEXT PRIMARY KEY,
+                name  TEXT,
+                added_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+
+            CREATE TABLE IF NOT EXISTS open_loops (
+                id          TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                context     TEXT,
+                created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+                follow_up_at INTEGER NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'open'
+                            CHECK(status IN ('open', 'dismissed', 'completed'))
+            );
+
+            CREATE TABLE IF NOT EXISTS watch_subscriptions (
+                id          TEXT PRIMARY KEY,
+                topic       TEXT NOT NULL,
+                created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+                is_active   INTEGER NOT NULL DEFAULT 1
+            );
             "#,
         )?;
         Ok(())
@@ -920,6 +948,182 @@ impl SqliteStore {
             }
         }
         Ok(events)
+    }
+
+    // ── User preferences ──────────────────────────────────────────────────────
+
+    pub fn get_pref(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM user_prefs WHERE key = ?1")?;
+        let result = stmt
+            .query_row(rusqlite::params![key], |row| row.get(0))
+            .optional()?;
+        Ok(result)
+    }
+
+    pub fn set_pref(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO user_prefs (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_all_prefs(&self) -> Result<Vec<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key, value FROM user_prefs ORDER BY key")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut prefs = Vec::new();
+        for row in rows {
+            prefs.push(row?);
+        }
+        Ok(prefs)
+    }
+
+    // ── VIP contacts ──────────────────────────────────────────────────────────
+
+    pub fn upsert_vip_contact(&self, email: &str, name: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO vip_contacts (email, name) VALUES (?1, ?2)
+             ON CONFLICT(email) DO UPDATE SET name = excluded.name",
+            rusqlite::params![email, name],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_vip_contacts(&self) -> Result<Vec<(String, Option<String>)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT email, name FROM vip_contacts ORDER BY email")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut contacts = Vec::new();
+        for row in rows {
+            contacts.push(row?);
+        }
+        Ok(contacts)
+    }
+
+    pub fn remove_vip_contact(&self, email: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM vip_contacts WHERE email = ?1",
+            rusqlite::params![email],
+        )?;
+        Ok(())
+    }
+
+    // ── Open loops ────────────────────────────────────────────────────────────
+
+    pub fn create_open_loop(
+        &self,
+        id: &str,
+        description: &str,
+        context: Option<&str>,
+        follow_up_at: i64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO open_loops (id, description, context, follow_up_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO NOTHING",
+            rusqlite::params![id, description, context, follow_up_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_open_loops(&self, status: Option<&str>) -> Result<Vec<trusty_models::OpenLoopRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut loops = Vec::new();
+        if let Some(s) = status {
+            let mut stmt = conn.prepare(
+                "SELECT id, description, context, created_at, follow_up_at, status
+                 FROM open_loops WHERE status = ?1 ORDER BY follow_up_at ASC",
+            )?;
+            for row in stmt.query_map(rusqlite::params![s], |row| {
+                Ok(trusty_models::OpenLoopRow {
+                    id: row.get(0)?,
+                    description: row.get(1)?,
+                    context: row.get(2)?,
+                    created_at: row.get(3)?,
+                    follow_up_at: row.get(4)?,
+                    status: row.get(5)?,
+                })
+            })? {
+                loops.push(row?);
+            }
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, description, context, created_at, follow_up_at, status
+                 FROM open_loops ORDER BY follow_up_at ASC",
+            )?;
+            for row in stmt.query_map([], |row| {
+                Ok(trusty_models::OpenLoopRow {
+                    id: row.get(0)?,
+                    description: row.get(1)?,
+                    context: row.get(2)?,
+                    created_at: row.get(3)?,
+                    follow_up_at: row.get(4)?,
+                    status: row.get(5)?,
+                })
+            })? {
+                loops.push(row?);
+            }
+        }
+        Ok(loops)
+    }
+
+    pub fn close_open_loop(&self, id: &str, status: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE open_loops SET status = ?1 WHERE id = ?2",
+            rusqlite::params![status, id],
+        )?;
+        Ok(())
+    }
+
+    // ── Watch subscriptions ───────────────────────────────────────────────────
+
+    pub fn add_watch_subscription(&self, id: &str, topic: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO watch_subscriptions (id, topic) VALUES (?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET topic = excluded.topic, is_active = 1",
+            rusqlite::params![id, topic],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_watch_subscriptions(&self) -> Result<Vec<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, topic FROM watch_subscriptions WHERE is_active = 1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut subs = Vec::new();
+        for row in rows {
+            subs.push(row?);
+        }
+        Ok(subs)
+    }
+
+    pub fn remove_watch_subscription(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE watch_subscriptions SET is_active = 0 WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_watch_subscription_active(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT is_active FROM watch_subscriptions WHERE id = ?1")?;
+        let result: Option<i64> = stmt
+            .query_row(rusqlite::params![id], |row| row.get(0))
+            .optional()?;
+        Ok(result.map(|v| v != 0).unwrap_or(false))
     }
 }
 
