@@ -273,6 +273,7 @@ async fn edit_message_text(
 }
 
 /// Delete a message (e.g. remove progress placeholder).
+#[allow(dead_code)]
 async fn delete_message(token: &str, chat_id: i64, message_id: i64) {
     let endpoint = format!("https://api.telegram.org/bot{token}/deleteMessage");
     let _ = reqwest::Client::new()
@@ -840,27 +841,16 @@ async fn webhook_handler(
                     "Chat turn complete"
                 );
 
-                let reply_text = &response.reply;
-                const MAX_EDIT: usize = 4000;
-
-                // 4. Edit placeholder with final reply, or delete + chunk-send if too long.
-                if reply_text.trim().is_empty() {
-                    // LLM returned no text — delete the progress placeholder silently.
-                    if progress_id > 0 {
-                        delete_message(&token, chat_id, progress_id).await;
-                    }
-                } else if progress_id > 0 {
-                    if reply_text.len() <= MAX_EDIT {
-                        let _ = edit_message_text(&token, chat_id, progress_id, reply_text, "HTML")
-                            .await;
-                    } else {
-                        delete_message(&token, chat_id, progress_id).await;
-                        let _ =
-                            send_reply_smart(&token, chat_id, reply_text, Some(message_id)).await;
-                    }
+                // Use a fallback if the LLM returns an empty reply.
+                let reply_owned;
+                let reply_text: &str = if response.reply.trim().is_empty() {
+                    reply_owned = "👍".to_string();
+                    &reply_owned
                 } else {
-                    let _ = send_reply_smart(&token, chat_id, reply_text, Some(message_id)).await;
-                }
+                    &response.reply
+                };
+                // 4. Send reply (no placeholder message — typing indicator in header handles UX).
+                let _ = send_reply_smart(&token, chat_id, reply_text, Some(message_id)).await;
 
                 if let Err(e) = sqlite_log
                     .log_telegram_interaction("outbound", chat_id, None, None, reply_text, None)
