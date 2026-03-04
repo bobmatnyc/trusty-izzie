@@ -158,6 +158,42 @@ async fn api_delete_webhook(token: &str) -> Result<()> {
 }
 
 /// Send a chat action (e.g. "typing"). Fire-and-forget — never fails the caller.
+/// Reverse-geocode lat/lon to a human-readable place name via Nominatim.
+/// Returns e.g. "Berlin, Germany" or falls back to raw coordinates.
+async fn reverse_geocode(lat: f64, lon: f64) -> String {
+    let url = format!(
+        "https://nominatim.openstreetmap.org/reverse?format=json&lat={}&lon={}&zoom=10",
+        lat, lon
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "trusty-izzie/1.0")
+        .send()
+        .await;
+    if let Ok(r) = resp {
+        if let Ok(json) = r.json::<serde_json::Value>().await {
+            let city = json["address"]["city"]
+                .as_str()
+                .or_else(|| json["address"]["town"].as_str())
+                .or_else(|| json["address"]["village"].as_str())
+                .or_else(|| json["address"]["county"].as_str())
+                .unwrap_or("");
+            let country = json["address"]["country"].as_str().unwrap_or("");
+            if !city.is_empty() && !country.is_empty() {
+                return format!("{}, {}", city, country);
+            } else if !country.is_empty() {
+                return country.to_string();
+            } else if let Some(name) = json["display_name"].as_str() {
+                // Trim to first two comma-separated parts for brevity
+                let parts: Vec<&str> = name.splitn(3, ',').collect();
+                return parts[..parts.len().min(2)].join(",").trim().to_string();
+            }
+        }
+    }
+    format!("{:.4}°, {:.4}°", lat, lon)
+}
+
 async fn send_chat_action(token: &str, chat_id: i64, action: &str) {
     let endpoint = format!("https://api.telegram.org/bot{token}/sendChatAction");
     let _ = reqwest::Client::new()
@@ -362,6 +398,13 @@ struct IncomingMessage {
     text: Option<String>,
     document: Option<IncomingDocument>,
     caption: Option<String>,
+    location: Option<IncomingLocation>,
+}
+
+#[derive(Deserialize)]
+struct IncomingLocation {
+    latitude: f64,
+    longitude: f64,
 }
 
 #[derive(Deserialize, Clone)]
@@ -711,6 +754,39 @@ async fn webhook_handler(
                     }
                 }
             }
+        });
+        return StatusCode::OK;
+    }
+
+    // Handle Telegram location share (GPS coordinates).
+    if let Some(loc) = &msg.location {
+        let place = reverse_geocode(loc.latitude, loc.longitude).await;
+        let memory_content = format!("User's current location: {}", place);
+        let sqlite_loc = state.sqlite.clone();
+        let place_clone = place.clone();
+        let mem_store_loc = Arc::clone(&state.memory_store);
+        let user_id_loc = state.user_context.user_id.clone();
+        let token_loc = state.bot_token.clone();
+        tokio::spawn(async move {
+            // Persist location as a short-lived memory and as a kv_config entry.
+            let _ = mem_store_loc
+                .save(
+                    &user_id_loc,
+                    &memory_content,
+                    trusty_models::memory::MemoryCategory::General,
+                    vec![],
+                    0.9,
+                    None,
+                )
+                .await;
+            let place_for_ack = place_clone.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = sqlite_loc.set_config("user_current_location", &place_clone);
+            })
+            .await;
+            // Acknowledge the location share.
+            let ack = format!("📍 Got it — I've noted you're in <b>{}</b>.", place_for_ack);
+            let _ = send_message(&token_loc, chat_id, &ack, Some(message_id), "HTML").await;
         });
         return StatusCode::OK;
     }
