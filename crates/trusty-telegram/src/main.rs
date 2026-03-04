@@ -336,6 +336,7 @@ async fn send_reply(token: &str, chat_id: i64, text: &str) -> Result<()> {
 }
 
 /// Send a "progress" placeholder message; returns its message_id for later editing.
+#[allow(dead_code)]
 async fn send_progress_message(token: &str, chat_id: i64, reply_to: i64) -> i64 {
     send_message(token, chat_id, "…", Some(reply_to), "")
         .await
@@ -769,8 +770,8 @@ async fn webhook_handler(
     let memory_user_id = state.user_context.user_id.clone();
 
     tokio::spawn(async move {
-        // 2. Send progress placeholder (threaded reply to original message).
-        let progress_id = send_progress_message(&token, chat_id, message_id).await;
+        // 2. No placeholder message — typing indicator in the header is sufficient.
+        let progress_id: i64 = 0;
 
         // Handle /start and /help commands.
         if text_clone.trim() == "/start" || text_clone.trim() == "/help" {
