@@ -57,6 +57,8 @@ pub enum ToolName {
     SyncWhatsApp,
     /// Execute a bash shell command and return stdout/stderr.
     ExecuteShellCommand,
+    /// Fetch upcoming calendar events from Google Calendar.
+    GetCalendarEvents,
     /// Get user preferences for proactive features.
     GetPreferences,
     /// Set a user preference (key/value).

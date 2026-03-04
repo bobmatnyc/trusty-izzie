@@ -147,6 +147,7 @@ impl ChatEngine {
             ToolName::SyncMessages => self.tool_sync_messages(),
             ToolName::SyncWhatsApp => self.tool_sync_whatsapp(input),
             ToolName::ExecuteShellCommand => self.tool_execute_shell_command(input),
+            ToolName::GetCalendarEvents => self.tool_get_calendar_events(input),
             ToolName::GetPreferences => self.tool_get_preferences(),
             ToolName::SetPreference => self.tool_set_preference(input),
             ToolName::AddVipContact => self.tool_add_vip_contact(input),
@@ -525,6 +526,98 @@ impl ChatEngine {
             None,
         )?;
         Ok("WhatsApp sync queued. I'll read your WhatsApp message history and extract relationship context.".to_string())
+    }
+
+    fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
+        let sqlite = self.sqlite_ref()?;
+
+        // Resolve access token: try oauth_tokens table first, then kv_config fallback.
+        let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
+            .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+        let access_token = if let Ok(Some(tok)) = sqlite.get_oauth_token(&primary_email) {
+            tok.access_token
+        } else if let Ok(Some(tok)) = sqlite.get_config("google_access_token") {
+            tok
+        } else {
+            return Ok("I don't have a Google access token yet. Use /auth in Telegram to connect your Google account.".to_string());
+        };
+
+        // Parse optional parameters.
+        let days = input["days"].as_i64().unwrap_or(7).clamp(1, 30);
+        let now = chrono::Utc::now();
+        let time_min = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let time_max = (now + chrono::Duration::days(days))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        // Call Google Calendar API synchronously via a blocking runtime call.
+        let rt = tokio::runtime::Handle::try_current();
+        let events_json: serde_json::Value = if let Ok(handle) = rt {
+            tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    let client = reqwest::Client::new();
+                    let url = format!(
+                        "https://www.googleapis.com/calendar/v3/calendars/primary/events\
+                         ?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=20",
+                        time_min, time_max
+                    );
+                    client
+                        .get(&url)
+                        .bearer_auth(&access_token)
+                        .send()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Calendar API request failed: {e}"))?
+                        .json::<serde_json::Value>()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Calendar API parse failed: {e}"))
+                })
+            })?
+        } else {
+            return Ok("Calendar lookup requires async runtime.".to_string());
+        };
+
+        // Check for auth errors.
+        if let Some(err) = events_json.get("error") {
+            let msg = err["message"].as_str().unwrap_or("unknown error");
+            if err["code"].as_i64() == Some(401) {
+                return Ok(format!(
+                    "My Google access token has expired. Use /auth to reconnect. ({})",
+                    msg
+                ));
+            }
+            return Ok(format!("Google Calendar error: {}", msg));
+        }
+
+        let items = match events_json["items"].as_array() {
+            Some(a) => a,
+            None => return Ok("No calendar events found.".to_string()),
+        };
+
+        if items.is_empty() {
+            return Ok(format!("No events in the next {} days.", days));
+        }
+
+        // Format events for the LLM.
+        let mut lines = vec![format!("Upcoming events (next {} days):", days)];
+        for item in items {
+            let summary = item["summary"].as_str().unwrap_or("(no title)");
+            let start = item["start"]["dateTime"]
+                .as_str()
+                .or_else(|| item["start"]["date"].as_str())
+                .unwrap_or("unknown time");
+            let location = item["location"].as_str().unwrap_or("");
+            let attendee_count = item["attendees"].as_array().map(|a| a.len()).unwrap_or(0);
+
+            let mut line = format!("• {} — {}", start, summary);
+            if !location.is_empty() {
+                line.push_str(&format!(" @ {}", location));
+            }
+            if attendee_count > 1 {
+                line.push_str(&format!(" ({} attendees)", attendee_count));
+            }
+            lines.push(line);
+        }
+        Ok(lines.join("\n"))
     }
 
     fn tool_list_accounts(&self) -> Result<String> {
@@ -948,6 +1041,7 @@ I learn from email sent from multiple Google accounts. Use `list_accounts` to se
 
 ## What I Can Do
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
+- **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7).
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
@@ -958,6 +1052,7 @@ I learn from email sent from multiple Google accounts. Use `list_accounts` to se
 - `list_events` — list scheduled or recent events, optionally filtered by status
 - `run_agent` — enqueue a background research agent task
 - `list_agents` — list available agent definitions
+- `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30)
 - `get_agent_task` — get the status and output of an agent task by ID
 - `list_accounts` — list all registered Google accounts
 - `add_account` — add a Google account (returns OAuth URL; account registered after user consents)
