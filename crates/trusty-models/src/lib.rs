@@ -12,7 +12,7 @@ pub mod event;
 pub mod memory;
 
 pub use agent::{Account, AgentTask, OAuthToken, OpenLoopRow};
-pub use chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
+pub use chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse, ToolCallRequest};
 pub use config::{AppConfig, DaemonConfig, ExtractionConfig, OpenRouterConfig, StorageConfig};
 pub use email::{EmailMessage, GmailHistoryCursor};
 pub use entity::{Entity, EntityType, Relationship, RelationshipStatus, RelationshipType};

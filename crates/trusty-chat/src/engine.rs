@@ -20,8 +20,7 @@ pub struct ChatEngine {
     api_base: String,
     api_key: String,
     model: String,
-    /// Reserved for the tool call loop (phase 2 — not yet implemented).
-    #[allow(dead_code)]
+    /// Maximum number of tool call iterations per chat turn.
     max_tool_iterations: u32,
     context_assembler: ContextAssembler,
     /// Optional SQLite store for event queue tool dispatch.
@@ -894,13 +893,16 @@ impl ChatEngine {
 
     /// Process a single user turn, returning the assistant's reply.
     ///
-    /// The caller is responsible for loading and saving the session.
+    /// Implements a multi-turn JSON tool-calling loop:
+    /// - LLM may return `toolCalls` to request tool execution.
+    /// - Engine executes tools, appends results, and calls LLM again.
+    /// - Loop runs until `toolCalls` is empty or `max_tool_iterations` is reached.
     pub async fn chat(
         &self,
         session: &mut ChatSession,
         user_message: &str,
     ) -> Result<StructuredResponse> {
-        // 1. Append user message
+        // 1. Append user message to session.
         session.messages.push(ChatMessage {
             id: Uuid::new_v4(),
             session_id: session.id,
@@ -912,19 +914,17 @@ impl ChatEngine {
             created_at: chrono::Utc::now(),
         });
 
-        // 2. Assemble RAG context from LanceDB entities and memories
+        // 2. Assemble RAG context.
         let ctx = self.context_assembler.assemble(user_message, "").await?;
         let context_section = self.context_assembler.render_context(&ctx);
-
-        // 3. Build messages for OpenRouter
         let now = chrono::Utc::now();
         let system_content = system_prompt(now, &context_section);
 
-        let mut messages: Vec<OrchatMessage> = vec![OrchatMessage {
+        // 3. Build the LLM message array from session history.
+        let mut llm_messages: Vec<OrchatMessage> = vec![OrchatMessage {
             role: "system".to_string(),
             content: system_content,
         }];
-
         for msg in &session.messages {
             let role = match msg.role {
                 MessageRole::User => "user",
@@ -932,62 +932,105 @@ impl ChatEngine {
                 MessageRole::Tool => "tool",
                 MessageRole::System => "system",
             };
-            messages.push(OrchatMessage {
+            llm_messages.push(OrchatMessage {
                 role: role.to_string(),
                 content: msg.content.clone(),
             });
         }
 
-        // 4. Call OpenRouter
-        let url = format!("{}/chat/completions", self.api_base);
-        let request_body = OrchatRequest {
-            model: &self.model,
-            messages,
-            tools: None,
-            max_tokens: 2048,
-            temperature: 0.7,
-            response_format: ResponseFormat {
-                r#type: "json_object",
-            },
+        // 4. Tool call loop.
+        let max_iters = (self.max_tool_iterations as usize).max(1);
+        let mut structured = StructuredResponse {
+            reply: String::new(),
+            memories_to_save: vec![],
+            referenced_entities: vec![],
+            tool_calls: vec![],
         };
+        let mut final_token_count: Option<u32> = None;
+        let url = format!("{}/chat/completions", self.api_base);
 
-        let http_response = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .json(&request_body)
-            .send()
-            .await
-            .context("failed to send request to OpenRouter")?;
+        for _iteration in 0..max_iters {
+            let request_body = OrchatRequest {
+                model: &self.model,
+                messages: llm_messages.clone(),
+                tools: None,
+                max_tokens: 2048,
+                temperature: 0.7,
+                response_format: ResponseFormat {
+                    r#type: "json_object",
+                },
+            };
 
-        let status = http_response.status();
-        if !status.is_success() {
-            let body = http_response
-                .text()
+            let http_response = self
+                .http
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .json(&request_body)
+                .send()
                 .await
-                .unwrap_or_else(|_| "<unreadable>".to_string());
-            return Err(anyhow::anyhow!("OpenRouter returned {}: {}", status, body));
+                .context("failed to send request to OpenRouter")?;
+
+            let status = http_response.status();
+            if !status.is_success() {
+                let body = http_response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<unreadable>".to_string());
+                return Err(anyhow::anyhow!("OpenRouter returned {}: {}", status, body));
+            }
+
+            let or_response: OrchatResponse = http_response
+                .json()
+                .await
+                .context("failed to deserialize OpenRouter response")?;
+
+            let raw_content = or_response
+                .choices
+                .into_iter()
+                .next()
+                .map(|c| c.message.content)
+                .unwrap_or_default();
+
+            final_token_count = or_response.usage.map(|u| u.total_tokens);
+            structured = parse_response(&raw_content);
+            structured.reply = clean_reply(&structured.reply);
+
+            // Check for tool calls.
+            let tool_calls = std::mem::take(&mut structured.tool_calls);
+            if tool_calls.is_empty() {
+                break; // No tool calls — final response.
+            }
+
+            // Execute each requested tool.
+            let mut results_text = String::new();
+            for tc in &tool_calls {
+                let result = match serde_json::from_value::<ToolName>(serde_json::Value::String(
+                    tc.name.clone(),
+                )) {
+                    Ok(tool_name) => self
+                        .execute_tool(&tool_name, &tc.arguments)
+                        .unwrap_or_else(|e| format!("Error: {e}")),
+                    Err(_) => format!("Unknown tool: {}", tc.name),
+                };
+                tracing::debug!(tool = %tc.name, "tool executed");
+                results_text.push_str(&format!("Tool `{}` returned:\n{}\n\n", tc.name, result));
+            }
+
+            // Append the assistant's tool-request turn and the results to the LLM context.
+            llm_messages.push(OrchatMessage {
+                role: "assistant".to_string(),
+                content: raw_content,
+            });
+            llm_messages.push(OrchatMessage {
+                role: "user".to_string(),
+                content: format!(
+                    "Tool results:\n\n{}Now please provide your final response.",
+                    results_text
+                ),
+            });
         }
 
-        let or_response: OrchatResponse = http_response
-            .json()
-            .await
-            .context("failed to deserialize OpenRouter response")?;
-
-        let raw_content = or_response
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .unwrap_or_default();
-
-        let token_count = or_response.usage.map(|u| u.total_tokens);
-
-        // 5. Parse StructuredResponse with fallback; clean trailing JSON fence from reply.
-        let mut structured = parse_response(&raw_content);
-        structured.reply = clean_reply(&structured.reply);
-
-        // 6. Append assistant message
+        // 5. Append the final assistant message to the persistent session.
         session.messages.push(ChatMessage {
             id: Uuid::new_v4(),
             session_id: session.id,
@@ -995,7 +1038,7 @@ impl ChatEngine {
             content: structured.reply.clone(),
             tool_name: None,
             tool_result: None,
-            token_count,
+            token_count: final_token_count,
             created_at: chrono::Utc::now(),
         });
 
@@ -1083,12 +1126,36 @@ I can run shell commands on your Mac via `execute_shell_command`. This lets me:
 - Check system state: `ps aux | grep something`, `df -h`, etc.
 Use this for any scripting or file system tasks.
 
-CRITICAL OUTPUT FORMAT: Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
+## Tool Calling Protocol
+
+To invoke a tool, set `toolCalls` to a non-empty array. Leave `reply` empty when requesting tools — the user won't see it until you give your final response:
+
+{{"reply":"","toolCalls":[{{"name":"get_calendar_events","arguments":{{"days":7}}}}],"memoriesToSave":[],"referencedEntities":[]}}
+
+After tool results are injected into the conversation, give your final answer with `toolCalls` empty:
+
+{{"reply":"Here is your schedule for the next week...","toolCalls":[],"memoriesToSave":[],"referencedEntities":[]}}
+
+## Anti-Hallucination Rules
+
+NEVER fabricate factual information. For these topics you MUST call the appropriate tool — never answer from memory or training data:
+- Calendar / schedule / meetings → `get_calendar_events`
+- Scheduled tasks / reminders / events → `list_events`
+- Google accounts → `list_accounts`
+- Service health / running processes → `check_service_status`
+- Any file system, shell, or system state query → `execute_shell_command`
+- User preferences → `get_preferences`
+
+If a tool returns no data (e.g. no calendar events), say so honestly. Never invent meetings, contacts, emails, or any factual data.
+
+## CRITICAL OUTPUT FORMAT
+
+Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
 
 Required format (output this and nothing else):
-{{"reply":"your response to the user (markdown allowed)","memoriesToSave":[],"referencedEntities":[]}}
+{{"reply":"your response to the user (markdown allowed)","toolCalls":[],"memoriesToSave":[],"referencedEntities":[]}}
 
-IMPORTANT: The "reply" field must ALWAYS contain a non-empty response. Even for declarative statements or information shared by the user, you must acknowledge receipt — e.g. "Got it, noted!" or "Thanks, I've made note of that." or a brief summary of what you understood. Never leave "reply" as an empty string.
+IMPORTANT: The "reply" field must ALWAYS be non-empty in your final response (when `toolCalls` is empty). Even for declarative statements, acknowledge receipt — e.g. "Got it, noted!" Never leave "reply" empty in a final response.
 
 Be helpful, concise, and honest. Only include items in memoriesToSave if you learned something genuinely new and useful. Be selective — 0-1 memories per turn is typical."#,
         now.format("%A, %B %d, %Y"),
@@ -1151,6 +1218,7 @@ fn parse_response(raw: &str) -> StructuredResponse {
         reply: raw.to_string(),
         memories_to_save: vec![],
         referenced_entities: vec![],
+        tool_calls: vec![],
     }
 }
 

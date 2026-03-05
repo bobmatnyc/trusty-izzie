@@ -76,6 +76,20 @@ pub struct StructuredResponse {
     /// The LLM returns normalized strings (e.g. "bob_matsuoka"), not UUIDs.
     #[serde(default)]
     pub referenced_entities: Vec<String>,
+    /// Tool calls the LLM is requesting the engine to execute before final reply.
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallRequest>,
+}
+
+/// A request from the LLM to execute a tool (in-band JSON tool calling).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallRequest {
+    /// Tool name in snake_case (e.g. "get_calendar_events").
+    pub name: String,
+    /// Arguments to pass to the tool.
+    #[serde(default)]
+    pub arguments: serde_json::Value,
 }
 
 /// A memory the LLM is requesting be persisted.
