@@ -7,6 +7,9 @@ use rusqlite::{Connection, OpenFlags};
 use std::sync::Arc;
 use tracing::{info, warn};
 
+/// (source, contact, text) triple returned from each DB query.
+type MsgRow = (i64, Vec<(String, String, String)>);
+
 use trusty_core::error::TrustyError;
 use trusty_models::{EventPayload, EventType, QueuedEvent};
 use trusty_store::Store;
@@ -66,7 +69,7 @@ async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
     let imsg_db = format!("{home}/Library/Messages/chat.db");
     let (new_imsg_rowid, imessages) = tokio::task::spawn_blocking({
         let imsg_db = imsg_db.clone();
-        move || -> Result<(i64, Vec<(String, String, String)>), anyhow::Error> {
+        move || -> Result<MsgRow, anyhow::Error> {
             let conn = Connection::open_with_flags(
                 &imsg_db,
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -105,7 +108,7 @@ async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
     );
     let (new_wa_pk, whatsapp_messages) = tokio::task::spawn_blocking({
         let wa_db = wa_db.clone();
-        move || -> Result<(i64, Vec<(String, String, String)>), anyhow::Error> {
+        move || -> Result<MsgRow, anyhow::Error> {
             let conn = Connection::open_with_flags(
                 &wa_db,
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,

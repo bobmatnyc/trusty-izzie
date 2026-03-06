@@ -193,6 +193,12 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
             EventPayload::WeeklyDigest {},
             next_weekly_ts(chrono::Weekday::Mon, 9, 0),
         )?;
+        seed_if_absent(
+            sqlite,
+            EventType::MessageInterruptCheck,
+            EventPayload::MessageInterruptCheck {},
+            now,
+        )?;
     }
 
     let agents_dir = std::path::PathBuf::from(&config.agents.agents_dir);

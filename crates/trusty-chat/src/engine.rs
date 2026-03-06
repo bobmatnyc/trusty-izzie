@@ -340,6 +340,7 @@ impl ChatEngine {
                 subscription_id: input["subscription_id"].as_str().unwrap_or("").to_string(),
                 topic: input["topic"].as_str().unwrap_or("").to_string(),
             },
+            EventType::MessageInterruptCheck => EventPayload::MessageInterruptCheck {},
         };
 
         let id = self.sqlite_ref()?.enqueue_event(
