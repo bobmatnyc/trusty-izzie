@@ -25,6 +25,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use axum::extract::{Json, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use clap::{Parser, Subcommand};
@@ -448,6 +449,89 @@ struct WebhookState {
 
 async fn health_handler() -> StatusCode {
     StatusCode::OK
+}
+
+// ---------------------------------------------------------------------------
+// HTTP chat endpoint — allows trusty-cli to delegate to this process and avoid
+// opening a competing KuzuDB write connection.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct ChatRequest {
+    message: String,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ChatResponse {
+    reply: String,
+    session_id: String,
+}
+
+async fn chat_handler(
+    State(state): State<Arc<WebhookState>>,
+    Json(req): Json<ChatRequest>,
+) -> impl axum::response::IntoResponse {
+    let session_id = req
+        .session_id
+        .as_deref()
+        .and_then(|s| s.parse::<uuid::Uuid>().ok())
+        .unwrap_or_else(uuid::Uuid::new_v4);
+
+    // Load existing session or create a fresh one for the CLI user (last 50 messages).
+    let mut session = match state.session_manager.load_or_create(session_id, 50).await {
+        Ok(s) => s,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
+
+    match state.engine.chat(&mut session, &req.message).await {
+        Ok(response) => {
+            // Persist session (best-effort, async).
+            let sm = Arc::clone(&state.session_manager);
+            let session_to_save = session.clone();
+            tokio::spawn(async move {
+                if let Err(e) = sm.save(&session_to_save).await {
+                    warn!("cli chat: failed to save session: {e}");
+                }
+            });
+
+            // Persist memories (best-effort, async).
+            if !response.memories_to_save.is_empty() {
+                let mem_store = Arc::clone(&state.memory_store);
+                let memories = response.memories_to_save.clone();
+                tokio::spawn(async move {
+                    for mem in memories {
+                        if let Err(e) = mem_store
+                            .save(
+                                "cli",
+                                &mem.content,
+                                mem.category,
+                                mem.related_entities,
+                                mem.importance,
+                                None,
+                            )
+                            .await
+                        {
+                            warn!("cli chat: failed to save memory: {e}");
+                        }
+                    }
+                });
+            }
+
+            (
+                StatusCode::OK,
+                Json(ChatResponse {
+                    reply: response.reply,
+                    session_id: session_id.to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 async fn oauth_callback_handler(
@@ -1208,6 +1292,7 @@ async fn run_webhook(
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/v1/chat", post(chat_handler))
         .route("/webhook/telegram", post(webhook_handler))
         .route("/api/auth/google/callback", get(oauth_callback_handler))
         .with_state(state);

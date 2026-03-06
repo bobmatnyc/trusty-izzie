@@ -10,13 +10,8 @@ use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 use uuid::Uuid;
 
-use trusty_chat::context::ContextAssembler;
-use trusty_chat::engine::ChatEngine;
-use trusty_chat::session::SessionManager;
 use trusty_core::{init_logging, load_config};
 use trusty_email::auth::{generate_pkce_pair, GoogleAuthClient};
-use trusty_embeddings::{Embedder, EmbeddingModel};
-use trusty_memory::{MemoryRecaller, MemoryStore};
 use trusty_models::config::AppConfig;
 use trusty_models::entity::EntityType;
 use trusty_models::memory::MemoryCategory;
@@ -357,115 +352,98 @@ fn preview(s: &str, n: usize) -> String {
 
 // ── Command implementations ───────────────────────────────────────────────────
 
+/// HTTP-based chat: delegates to the running trusty-telegram server so only
+/// one process holds the KuzuDB write lock at a time.
 async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
-    let t0 = Instant::now();
-    let dry_run = args.dry_run;
+    let t0 = std::time::Instant::now();
+
+    if args.dry_run {
+        eprintln!("Note: --test (dry-run) is not supported in HTTP mode; the server will persist normally.");
+    }
 
     let message = match args.message {
         Some(m) => m,
         None => read_stdin_message()?,
     };
 
-    let sqlite = open_sqlite(&config)?;
-    let session_manager = SessionManager::new(Arc::clone(&sqlite));
-
-    // Resolve which session to use
-    let mut session = if let Some(explicit_id) = args.session {
-        // --session <uuid>: load it, create fresh if not found
-        match session_manager.load(explicit_id).await? {
-            Some(s) => s,
-            None => {
-                eprintln!("Session {explicit_id} not found; starting fresh.");
-                SessionManager::new_session(INSTANCE_ID)
-            }
-        }
-    } else if args.new {
-        // --new: always start fresh
-        SessionManager::new_session(INSTANCE_ID)
+    // Resolve session_id to pass to server.
+    // --new => None (server creates a new session)
+    // --session <uuid> => Some(<uuid>)
+    // default => read last session id from SQLite KV
+    let session_id: Option<String> = if args.new {
+        None
+    } else if let Some(explicit) = args.session {
+        Some(explicit.to_string())
     } else {
-        // default: resume stored session
-        let stored = sqlite.get_config(SESSION_KEY)?;
-        match stored.and_then(|s| if s.is_empty() { None } else { Some(s) }) {
-            Some(id_str) => match id_str.parse::<Uuid>() {
-                Ok(uid) => match session_manager.load(uid).await? {
-                    Some(s) => s,
-                    None => SessionManager::new_session(INSTANCE_ID),
-                },
-                Err(_) => SessionManager::new_session(INSTANCE_ID),
-            },
-            None => SessionManager::new_session(INSTANCE_ID),
-        }
+        let sqlite = open_sqlite(&config)?;
+        sqlite
+            .get_config(SESSION_KEY)?
+            .filter(|s| !s.is_empty())
+            .filter(|s| s.parse::<Uuid>().is_ok())
     };
 
-    let store = Arc::new(Store::open(&data_dir(&config), INSTANCE_ID).await?);
-    let embedder = Arc::new(
-        Embedder::new(EmbeddingModel::AllMiniLmL6V2)
-            .map_err(|e| anyhow::anyhow!("failed to init embedder: {e}"))?,
-    );
-    let memory_recaller = Arc::new(MemoryRecaller::new(
-        Arc::clone(&store),
-        Arc::clone(&embedder),
-    ));
-    let memory_store = Arc::new(MemoryStore::new(Arc::clone(&store), Arc::clone(&embedder)));
-    let assembler = ContextAssembler::new(5, 10)
-        .with_lance(Arc::clone(&store.lance))
-        .with_memory_recaller(memory_recaller);
+    let base_url =
+        std::env::var("TRUSTY_SERVER_URL").unwrap_or_else(|_| "http://localhost:3456".to_string());
 
-    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
-    let engine = ChatEngine::new_with_context(
-        config.openrouter.base_url.clone(),
-        api_key,
-        config.openrouter.chat_model.clone(),
-        config.chat.max_tool_iterations,
-        assembler,
-    );
+    #[derive(serde::Serialize)]
+    struct Req<'a> {
+        message: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<&'a str>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Resp {
+        reply: String,
+        session_id: String,
+    }
 
     print_you(&message);
-    let response = engine.chat(&mut session, &message).await?;
-    print_izzie(&response.reply);
+
+    let client = reqwest::Client::new();
+    let resp: Resp = client
+        .post(format!("{base_url}/v1/chat"))
+        .json(&Req {
+            message: &message,
+            session_id: session_id.as_deref(),
+        })
+        .send()
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Could not reach trusty-telegram at {base_url}: {e}\n\
+                 Make sure 'trusty-telegram start' is running."
+            )
+        })?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    print_izzie(&resp.reply);
+    println!("\n[session: {}]", resp.session_id);
+
+    // Persist the returned session id so the next default chat resumes it.
+    if !args.new {
+        if let Ok(sqlite) = open_sqlite(&config) {
+            let _ = sqlite.set_config(SESSION_KEY, &resp.session_id);
+        }
+    }
 
     let duration_ms = t0.elapsed().as_millis() as u64;
-    let reply_preview = preview(&response.reply, 120);
-
-    let memories_saved = if dry_run {
-        println!("\n[TEST MODE — read-only, nothing will be saved]\n");
-        println!("Would save 0 memories:");
-        0usize
-    } else {
-        let count = response.memories_to_save.len();
-        for mem in response.memories_to_save {
-            if let Err(e) = memory_store
-                .save(
-                    INSTANCE_ID,
-                    &mem.content,
-                    mem.category,
-                    mem.related_entities,
-                    mem.importance,
-                    None,
-                )
-                .await
-            {
-                eprintln!("Failed to save memory: {e}");
-            }
-        }
-        session_manager.save(&session).await?;
-        sqlite.set_config(SESSION_KEY, &session.id.to_string())?;
-        count
-    };
-
+    let reply_preview = preview(&resp.reply, 120);
     let log_path = data_dir(&config).join("interactions.jsonl");
     let entry = InteractionLog {
         ts: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         command: "chat",
-        session_id: Some(session.id.to_string()),
+        session_id: Some(resp.session_id),
         message: Some(&message),
         reply_preview: Some(reply_preview),
         tokens: None,
         duration_ms,
-        memories_saved: Some(memories_saved),
+        memories_saved: None,
         query: None,
         result_count: None,
-        dry_run,
+        dry_run: false,
     };
     let _ = append_interaction(&log_path, &entry);
 
