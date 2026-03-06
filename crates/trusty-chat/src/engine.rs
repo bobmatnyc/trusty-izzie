@@ -1565,7 +1565,7 @@ impl ChatEngine {
             // Append the assistant's tool-request turn and the results to the LLM context.
             llm_messages.push(OrchatMessage {
                 role: "assistant".to_string(),
-                content: raw_content,
+                content: raw_content.clone(),
             });
             llm_messages.push(OrchatMessage {
                 role: "user".to_string(),
@@ -1573,6 +1573,31 @@ impl ChatEngine {
                     "Tool results:\n\n{}Now please provide your final response.",
                     results_text
                 ),
+            });
+
+            // Persist the same two turns to session.messages so they survive a reload.
+            session.messages.push(ChatMessage {
+                id: Uuid::new_v4(),
+                session_id: session.id,
+                role: MessageRole::Assistant,
+                content: raw_content,
+                tool_name: None,
+                tool_result: None,
+                token_count: None,
+                created_at: chrono::Utc::now(),
+            });
+            session.messages.push(ChatMessage {
+                id: Uuid::new_v4(),
+                session_id: session.id,
+                role: MessageRole::Tool,
+                content: format!(
+                    "Tool results:\n\n{}Now please provide your final response.",
+                    results_text
+                ),
+                tool_name: None,
+                tool_result: None,
+                token_count: None,
+                created_at: chrono::Utc::now(),
             });
         }
 
