@@ -122,12 +122,16 @@ fn expand_tilde(path: &str) -> PathBuf {
 }
 
 /// Call the Telegram Bot API `setWebhook` endpoint.
-async fn api_set_webhook(token: &str, url: &str) -> Result<()> {
+async fn api_set_webhook(token: &str, url: &str, secret_token: Option<&str>) -> Result<()> {
     let endpoint = format!("https://api.telegram.org/bot{token}/setWebhook");
     let client = reqwest::Client::new();
+    let mut body = serde_json::json!({ "url": url });
+    if let Some(s) = secret_token {
+        body["secret_token"] = serde_json::json!(s);
+    }
     let resp: serde_json::Value = client
         .post(&endpoint)
-        .json(&serde_json::json!({ "url": url }))
+        .json(&body)
         .send()
         .await?
         .json()
@@ -749,8 +753,23 @@ async fn oauth_callback_handler(
 
 async fn webhook_handler(
     State(state): State<Arc<WebhookState>>,
+    headers: axum::http::HeaderMap,
     Json(update): Json<IncomingUpdate>,
 ) -> StatusCode {
+    // Validate the Telegram webhook secret token.
+    let expected = state
+        .sqlite
+        .get_config("webhook_secret_token")
+        .unwrap_or_default()
+        .unwrap_or_default();
+    let provided = headers
+        .get("X-Telegram-Bot-Api-Secret-Token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !expected.is_empty() && provided != expected {
+        warn!("webhook: rejected request with invalid secret token");
+        return StatusCode::FORBIDDEN;
+    }
     let msg = match update.message {
         Some(m) => m,
         None => return StatusCode::OK,
@@ -1315,8 +1334,23 @@ async fn run_webhook(
     gdrive_token: Option<String>,
     memory_store: Arc<MemoryStore>,
 ) -> Result<()> {
+    // Retrieve or generate the webhook secret token (persisted across restarts).
+    let webhook_secret = match sqlite.get_config("webhook_secret_token").ok().flatten() {
+        Some(t) => t,
+        None => {
+            use rand::Rng;
+            let t: String = rand::thread_rng()
+                .sample_iter(&rand::distributions::Alphanumeric)
+                .take(32)
+                .map(char::from)
+                .collect();
+            sqlite.set_config("webhook_secret_token", &t)?;
+            t
+        }
+    };
+
     // Register webhook with Telegram.
-    api_set_webhook(&bot_token, &webhook_url).await?;
+    api_set_webhook(&bot_token, &webhook_url, Some(&webhook_secret)).await?;
 
     let session_manager = Arc::new(SessionManager::new(sqlite.clone()));
     let state = Arc::new(WebhookState {
@@ -1572,7 +1606,7 @@ async fn main() -> Result<()> {
 
             match action {
                 WebhookAction::Set { url } => {
-                    api_set_webhook(&token, &url).await?;
+                    api_set_webhook(&token, &url, None).await?;
                 }
                 WebhookAction::Clear => {
                     api_delete_webhook(&token).await?;
