@@ -16,7 +16,6 @@
 //!   trusty-telegram webhook clear
 
 mod channel;
-mod email_sync;
 mod er_persist;
 mod gdrive;
 
@@ -1396,83 +1395,8 @@ async fn main() -> Result<()> {
             let min_occurrences = 2u32;
             let gdrive_token = sqlite.get_config("google_access_token").ok().flatten();
 
-            // Spawn per-account background email sync loops.
-            {
-                let accounts_for_sync = store
-                    .sqlite
-                    .list_accounts()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|a| a.is_active)
-                    .collect::<Vec<_>>();
-
-                // Always include primary with fallback token resolution.
-                let accounts_to_sync: Vec<(UserContext, Option<String>)> =
-                    if accounts_for_sync.is_empty() {
-                        // No accounts registered yet — use user_context for primary.
-                        vec![(
-                            user_context.clone(),
-                            store
-                                .sqlite
-                                .get_config("google_access_token")
-                                .ok()
-                                .flatten(),
-                        )]
-                    } else {
-                        accounts_for_sync
-                            .iter()
-                            .filter_map(|acc| {
-                                // Try oauth_tokens table first, then kv_config for primary.
-                                let token = store
-                                    .sqlite
-                                    .get_oauth_token(&acc.email)
-                                    .ok()
-                                    .flatten()
-                                    .map(|t| t.access_token)
-                                    .or_else(|| {
-                                        if acc.account_type == "primary" {
-                                            store
-                                                .sqlite
-                                                .get_config("google_access_token")
-                                                .ok()
-                                                .flatten()
-                                        } else {
-                                            None
-                                        }
-                                    });
-                                if token.is_none() {
-                                    warn!("No OAuth token for {}, skipping sync", acc.email);
-                                }
-                                token.map(|tok| {
-                                    let ctx = UserContext {
-                                        user_id: acc.email.clone(),
-                                        email: acc.email.clone(),
-                                        display_name: acc
-                                            .display_name
-                                            .clone()
-                                            .unwrap_or_else(|| acc.email.clone()),
-                                    };
-                                    (ctx, Some(tok))
-                                })
-                            })
-                            .collect()
-                    };
-
-                for (user_ctx, _token_opt) in accounts_to_sync {
-                    let store_sync = Arc::clone(&store);
-                    let extractor_sync = Arc::clone(&extractor);
-                    let _sync_handle = tokio::task::spawn(async move {
-                        email_sync::run_email_sync_loop(
-                            store_sync,
-                            extractor_sync,
-                            user_ctx,
-                            3600,
-                            min_occurrences,
-                        )
-                        .await;
-                    });
-                }
-            }
+            // Email sync is handled by trusty-daemon via the event queue.
+            // Do not run it inline here.
 
             if allowed.is_empty() {
                 println!("trusty-telegram starting (no user restriction)...");
