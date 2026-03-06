@@ -1380,6 +1380,13 @@ impl ChatEngine {
             return Ok("Error: 'command' field is required".to_string());
         }
 
+        if is_dangerous_command(command) {
+            tracing::warn!(command = %command, "tool_execute_shell_command: blocked dangerous command pattern");
+            return Ok("Error: Command blocked — contains a potentially destructive pattern. If you intended this, rephrase your request.".to_string());
+        }
+
+        tracing::info!(command = %command, "tool_execute_shell_command: executing");
+
         let output = tokio::process::Command::new("bash")
             .arg("-c")
             .arg(command)
@@ -1607,6 +1614,36 @@ impl ChatEngine {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Patterns that are never allowed, regardless of context.
+const BLOCKED_SHELL_PATTERNS: &[&str] = &[
+    "rm -rf",
+    "rm -r /",
+    "rm -r ~",
+    "> /dev/sda",
+    "dd if=",
+    "mkfs",
+    ":(){ :|:& };:", // fork bomb
+    "curl | bash",
+    "curl | sh",
+    "wget | bash",
+    "wget | sh",
+    "| bash",
+    "| sh",
+    "sudo ",
+    "sudo\t",
+    "pkill",
+    "killall",
+    "launchctl unload",
+    "defaults delete",
+    "chmod 777 /",
+    "chown root",
+];
+
+fn is_dangerous_command(cmd: &str) -> bool {
+    let lower = cmd.to_lowercase();
+    BLOCKED_SHELL_PATTERNS.iter().any(|pat| lower.contains(pat))
+}
+
 fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str, accounts_ctx: &str) -> String {
     let user_email =
         std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
@@ -1692,6 +1729,9 @@ I can run shell commands on your Mac via `execute_shell_command`. This lets me:
 - Run scripts: any bash command
 - Check system state: `ps aux | grep something`, `df -h`, etc.
 Use this for any scripting or file system tasks.
+
+Note: Destructive commands (rm -rf, sudo, pkill, pipe-to-shell, dd, mkfs) are automatically blocked.
+Use execute_shell_command for read-only operations: ls, cat, grep, find, ps, df, etc.
 
 ## Tool Calling Protocol
 
