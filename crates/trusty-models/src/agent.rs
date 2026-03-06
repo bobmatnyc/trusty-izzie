@@ -35,6 +35,7 @@ pub struct Account {
     pub account_type: String, // "primary" | "secondary"
     pub is_active: bool,
     pub created_at: i64,
+    pub identity: String, // "work" | "personal"
 }
 
 /// An OAuth2 token row from the `oauth_tokens` table.

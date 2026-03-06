@@ -187,6 +187,23 @@ impl SqliteStore {
             );
             "#,
         )?;
+
+        // Migration: add identity column if it doesn't exist yet (safe to run on existing DBs).
+        let has_identity: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name='identity'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            != 0;
+        if !has_identity {
+            conn.execute_batch(
+                "ALTER TABLE accounts ADD COLUMN identity TEXT NOT NULL DEFAULT 'personal' \
+                 CHECK(identity IN ('work', 'personal'));",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -789,8 +806,8 @@ impl SqliteStore {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             r#"
-            INSERT OR IGNORE INTO accounts (id, email, display_name, account_type, is_active)
-            VALUES (?1, ?2, ?2, 'primary', 1)
+            INSERT OR IGNORE INTO accounts (id, email, display_name, account_type, is_active, identity)
+            VALUES (?1, ?2, ?2, 'primary', 1, 'personal')
             "#,
             rusqlite::params![id, email],
         )?;
@@ -801,7 +818,7 @@ impl SqliteStore {
     pub fn list_accounts(&self) -> Result<Vec<trusty_models::Account>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, email, display_name, account_type, is_active, created_at
+            "SELECT id, email, display_name, account_type, is_active, created_at, identity
              FROM accounts
              ORDER BY CASE account_type WHEN 'primary' THEN 0 ELSE 1 END ASC, created_at ASC",
         )?;
@@ -813,6 +830,9 @@ impl SqliteStore {
                 account_type: row.get(3)?,
                 is_active: row.get::<_, i64>(4)? != 0,
                 created_at: row.get(5)?,
+                identity: row
+                    .get::<_, Option<String>>(6)?
+                    .unwrap_or_else(|| "personal".to_string()),
             })
         })?;
         let mut accounts = Vec::new();
@@ -833,8 +853,8 @@ impl SqliteStore {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             r#"
-            INSERT INTO accounts (id, email, display_name, account_type, is_active)
-            VALUES (?1, ?2, ?3, ?4, 1)
+            INSERT INTO accounts (id, email, display_name, account_type, is_active, identity)
+            VALUES (?1, ?2, ?3, ?4, 1, 'personal')
             ON CONFLICT(email) DO UPDATE SET
                 display_name = excluded.display_name,
                 account_type = excluded.account_type,
@@ -873,7 +893,7 @@ impl SqliteStore {
     pub fn get_account(&self, email: &str) -> Result<Option<trusty_models::Account>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, email, display_name, account_type, is_active, created_at
+            "SELECT id, email, display_name, account_type, is_active, created_at, identity
              FROM accounts WHERE email = ?1",
         )?;
         let result = stmt
@@ -885,10 +905,23 @@ impl SqliteStore {
                     account_type: row.get(3)?,
                     is_active: row.get::<_, i64>(4)? != 0,
                     created_at: row.get(5)?,
+                    identity: row
+                        .get::<_, Option<String>>(6)?
+                        .unwrap_or_else(|| "personal".to_string()),
                 })
             })
             .optional()?;
         Ok(result)
+    }
+
+    /// Update the identity ("work" | "personal") for an account.
+    pub fn update_account_identity(&self, email: &str, identity: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE accounts SET identity = ?1 WHERE email = ?2",
+            rusqlite::params![identity, email],
+        )?;
+        Ok(())
     }
 
     /// Get OAuth token row by user_id (= email).

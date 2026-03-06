@@ -255,16 +255,18 @@ impl ChatEngine {
             // Primary account has full scope (Calendar, Tasks, Drive, Gmail).
             // Secondary accounts were added with Gmail + userinfo scope only.
             let capabilities = if acc.email == primary_email {
-                "Gmail · Calendar · Tasks · Drive"
+                "calendar, tasks, email, drive"
             } else {
-                "Gmail only"
+                "email"
             };
-            let role = if acc.account_type == "primary" {
-                "primary"
-            } else {
-                "secondary"
+            let identity_label = match acc.identity.as_str() {
+                "work" => "work",
+                _ => "personal",
             };
-            lines.push(format!("- **{}** ({}) — {}", acc.email, role, capabilities));
+            lines.push(format!(
+                "Account: {} | identity: {} | capabilities: {} | status: active",
+                acc.email, identity_label, capabilities
+            ));
         }
         lines.push(String::new());
         lines.push(format!(
@@ -1176,6 +1178,7 @@ impl ChatEngine {
                         "type": a.account_type,
                         "active": a.is_active,
                         "display_name": a.display_name,
+                        "identity": a.identity,
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -1711,6 +1714,30 @@ NEVER fabricate factual information. For these topics you MUST call the appropri
 - WhatsApp history → `search_whatsapp` ALWAYS; never fabricate message content
 
 If a tool returns no data (e.g. no calendar events), say so honestly. Never invent meetings, contacts, emails, or any factual data.
+
+## Identity & Account Inference
+
+When the user asks about calendar, email, or tasks, infer which account to use from context:
+
+**Work account signals:**
+- Mentions of colleagues, boss, manager, client, team, company, office
+- Keywords: meeting, standup, sprint, deadline, invoice, project, task, PR, ticket
+- Professional context: "my 3pm", "the team call", "Q1 review"
+- Work hours context (when time is mentioned: 9am–6pm weekday)
+
+**Personal account signals:**
+- Mentions of family: wife, husband, partner, kids, parents, friend
+- Keywords: vacation, weekend, dentist, gym, dinner, birthday, holiday
+- Personal context: "our trip", "family dinner", "personal project"
+
+**When ambiguous or spanning both:**
+- Check both accounts and clearly label results: "On your work calendar... / On your personal calendar..."
+- Prefer work account during work hours (Mon–Fri 9am–6pm) if truly ambiguous
+
+**Always attribute results:**
+- "Your work calendar (email@company.com) shows..."
+- "On your personal calendar (email@gmail.com)..."
+- Never silently pick one without indicating which account you used
 
 ## CRITICAL OUTPUT FORMAT
 

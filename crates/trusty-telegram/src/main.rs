@@ -715,13 +715,21 @@ async fn oauth_callback_handler(
     if let Ok(Some(s)) = state.sqlite.get_config("oauth_pending_chat_id") {
         if let Ok(cid) = s.parse::<i64>() {
             if cid != 0 {
+                // Store email so the next message (work/personal reply) can look it up.
+                let _ = state
+                    .sqlite
+                    .set_config("oauth_pending_identity_email", &auth_email);
                 let tok = state.bot_token.clone();
                 let auth_email_notify = auth_email.clone();
                 tokio::spawn(async move {
-                    let _ = send_reply(
+                    let _ = send_message(
                         &tok,
                         cid,
-                        &format!("✅ Gmail connected ({auth_email_notify})! Trusty Izzie will now sync your sent mail."),
+                        &format!(
+                            "✅ Connected <b>{auth_email_notify}</b>!\n\nIs this your <b>work</b> or <b>personal</b> account?\nReply with <code>work</code> or <code>personal</code>."
+                        ),
+                        None,
+                        "HTML",
                     )
                     .await;
                 });
@@ -916,6 +924,40 @@ async fn webhook_handler(
             .await;
         });
         return StatusCode::OK;
+    }
+
+    // Intercept work/personal identity reply after OAuth.
+    if let Ok(Some(pending_email)) = state.sqlite.get_config("oauth_pending_identity_email") {
+        if !pending_email.is_empty() {
+            let reply_text = text.trim().to_lowercase();
+            if reply_text == "work" || reply_text == "personal" {
+                if let Err(e) = state
+                    .sqlite
+                    .update_account_identity(&pending_email, &reply_text)
+                {
+                    warn!("Failed to update account identity: {e}");
+                }
+                let _ = state.sqlite.set_config("oauth_pending_identity_email", "");
+                let label = if reply_text == "work" {
+                    "work"
+                } else {
+                    "personal"
+                };
+                let purpose = if reply_text == "work" {
+                    "work calendar, email, and tasks"
+                } else {
+                    "personal calendar, email, and tasks"
+                };
+                let ack = format!(
+                    "Got it — <b>{pending_email}</b> is your {label} account. I'll use it for {purpose}."
+                );
+                let tok = state.bot_token.clone();
+                tokio::spawn(async move {
+                    let _ = send_message(&tok, chat_id, &ack, Some(message_id), "HTML").await;
+                });
+                return StatusCode::OK;
+            }
+        }
     }
 
     // Process chat asynchronously — respond 200 immediately to Telegram.
