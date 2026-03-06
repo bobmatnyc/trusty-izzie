@@ -16,6 +16,8 @@ use trusty_store::SqliteStore;
 use crate::context::ContextAssembler;
 use crate::tools::ToolName;
 
+const PRIMARY_EMAIL: &str = "bob@matsuoka.com";
+
 /// Drives the conversation loop: context assembly → LLM call → tool dispatch → save.
 pub struct ChatEngine {
     http: reqwest::Client,
@@ -245,8 +247,8 @@ impl ChatEngine {
             return String::new();
         }
 
-        let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
-            .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+        let primary_email =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
 
         let mut lines = vec!["## Connected Google Accounts".to_string()];
         for acc in &active {
@@ -946,8 +948,8 @@ impl ChatEngine {
     }
 
     fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
-        let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
-            .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+        let primary_email =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
         let access_token = match self.get_valid_token(&primary_email) {
             Ok(t) => t,
             Err(_) => {
@@ -1040,8 +1042,8 @@ impl ChatEngine {
     }
 
     fn tool_get_task_lists(&self) -> Result<String> {
-        let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
-            .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+        let primary_email =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
         let access_token = match self.get_valid_token(&primary_email) {
             Ok(t) => t,
             Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
@@ -1087,8 +1089,8 @@ impl ChatEngine {
     }
 
     fn tool_get_tasks(&self, input: &serde_json::Value) -> Result<String> {
-        let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
-            .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+        let primary_email =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
         let access_token = match self.get_valid_token(&primary_email) {
             Ok(t) => t,
             Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
@@ -1571,6 +1573,15 @@ impl ChatEngine {
             });
         }
 
+        if structured.reply.is_empty() {
+            tracing::warn!(
+                max_iters = max_iters,
+                "tool call loop exhausted without producing a reply"
+            );
+            structured.reply =
+                "I ran into an issue retrieving that information — please try again.".to_string();
+        }
+
         // 5. Append the final assistant message to the persistent session.
         session.messages.push(ChatMessage {
             id: Uuid::new_v4(),
@@ -1591,7 +1602,7 @@ impl ChatEngine {
 
 fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str, accounts_ctx: &str) -> String {
     let user_email =
-        std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+        std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
     let user_name = std::env::var("TRUSTY_USER_NAME").unwrap_or_else(|_| "Masa".to_string());
     let context_section = if context.is_empty() {
         String::new()

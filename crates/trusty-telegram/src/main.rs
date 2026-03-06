@@ -331,7 +331,8 @@ fn chunk_text(text: &str, max_len: usize) -> Vec<String> {
             chunks.push(remaining.to_string());
             break;
         }
-        let window = &remaining[..max_len];
+        let safe_len = remaining.floor_char_boundary(max_len);
+        let window = &remaining[..safe_len];
         let split_at = window
             .rfind("\n\n")
             .or_else(|| window.rfind('\n'))

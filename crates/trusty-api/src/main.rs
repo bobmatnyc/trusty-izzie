@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use trusty_api::{routes::build_router, AppState};
@@ -36,9 +36,7 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(config, sqlite);
 
-    let app = build_router(state)
-        .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive());
+    let app = build_router(state).layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     axum::serve(listener, app).await?;
