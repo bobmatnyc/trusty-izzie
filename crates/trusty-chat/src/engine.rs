@@ -132,15 +132,15 @@ impl ChatEngine {
     ///
     /// Returns an error string rather than propagating `Err` so the model can
     /// receive feedback about what went wrong.
-    pub fn execute_tool(&self, name: &ToolName, input: &serde_json::Value) -> Result<String> {
+    pub async fn execute_tool(&self, name: &ToolName, input: &serde_json::Value) -> Result<String> {
         match name {
             ToolName::ScheduleEvent => self.tool_schedule_event(input),
             ToolName::CancelEvent => self.tool_cancel_event(input),
             ToolName::ListEvents => self.tool_list_events(input),
-            ToolName::CheckServiceStatus => self.tool_check_service_status(),
+            ToolName::CheckServiceStatus => self.tool_check_service_status().await,
             ToolName::GetVersion => self.tool_get_version(),
-            ToolName::SubmitGithubIssue => self.tool_submit_github_issue(input),
-            ToolName::ListAgents => self.tool_list_agents(),
+            ToolName::SubmitGithubIssue => self.tool_submit_github_issue(input).await,
+            ToolName::ListAgents => self.tool_list_agents().await,
             ToolName::RunAgent => self.tool_run_agent(input),
             ToolName::GetAgentTask => self.tool_get_agent_task(input),
             ToolName::ListAccounts => self.tool_list_accounts(),
@@ -149,8 +149,8 @@ impl ChatEngine {
             ToolName::SyncContacts => self.tool_sync_contacts(),
             ToolName::SyncMessages => self.tool_sync_messages(),
             ToolName::SyncWhatsApp => self.tool_sync_whatsapp(input),
-            ToolName::ExecuteShellCommand => self.tool_execute_shell_command(input),
-            ToolName::GetCalendarEvents => self.tool_get_calendar_events(input),
+            ToolName::ExecuteShellCommand => self.tool_execute_shell_command(input).await,
+            ToolName::GetCalendarEvents => self.tool_get_calendar_events(input).await,
             ToolName::GetPreferences => self.tool_get_preferences(),
             ToolName::SetPreference => self.tool_set_preference(input),
             ToolName::AddVipContact => self.tool_add_vip_contact(input),
@@ -161,8 +161,8 @@ impl ChatEngine {
             ToolName::ListWatchSubscriptions => self.tool_list_watch_subscriptions(),
             ToolName::ListOpenLoops => self.tool_list_open_loops(),
             ToolName::DismissOpenLoop => self.tool_dismiss_open_loop(input),
-            ToolName::GetTaskLists => self.tool_get_task_lists(),
-            ToolName::GetTasks => self.tool_get_tasks(input),
+            ToolName::GetTaskLists => self.tool_get_task_lists().await,
+            ToolName::GetTasks => self.tool_get_tasks(input).await,
             ToolName::SearchImessages => self.tool_search_imessages(input),
             ToolName::SearchContacts => self.tool_search_contacts(input),
             ToolName::SearchWhatsapp => self.tool_search_whatsapp(input),
@@ -180,7 +180,7 @@ impl ChatEngine {
     ///
     /// Refreshes if the token expires within the next 5 minutes. Returns `Err` if
     /// no token is stored or if the refresh fails.
-    fn get_valid_token(&self, user_id: &str) -> Result<String> {
+    async fn get_valid_token(&self, user_id: &str) -> Result<String> {
         let sqlite = self.sqlite_ref()?;
         let token = sqlite
             .get_oauth_token(user_id)?
@@ -208,12 +208,7 @@ impl ChatEngine {
 
         let auth = GoogleAuthClient::new(client_id, client_secret, redirect_uri);
 
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| anyhow::anyhow!("No async runtime available for token refresh"))?;
-
-        let new_token = tokio::task::block_in_place(|| {
-            handle.block_on(async { auth.refresh_token(&refresh_token).await })
-        })?;
+        let new_token = auth.refresh_token(&refresh_token).await?;
 
         let new_expires_at = Some(chrono::Utc::now().timestamp() + new_token.expires_in as i64);
 
@@ -389,10 +384,11 @@ impl ChatEngine {
         Ok(result)
     }
 
-    fn tool_check_service_status(&self) -> Result<String> {
-        let output = std::process::Command::new("launchctl")
+    async fn tool_check_service_status(&self) -> Result<String> {
+        let output = tokio::process::Command::new("launchctl")
             .args(["list"])
             .output()
+            .await
             .context("failed to run launchctl")?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let services: Vec<serde_json::Value> = stdout
@@ -424,13 +420,13 @@ impl ChatEngine {
         Ok(format!("trusty-izzie v{}", env!("CARGO_PKG_VERSION")))
     }
 
-    fn tool_submit_github_issue(&self, input: &serde_json::Value) -> Result<String> {
+    async fn tool_submit_github_issue(&self, input: &serde_json::Value) -> Result<String> {
         let title = input["title"].as_str().unwrap_or("").trim().to_string();
         let body = input["body"].as_str().unwrap_or("").trim().to_string();
         if title.is_empty() {
             return Ok("Error: title is required".to_string());
         }
-        let mut cmd = std::process::Command::new("gh");
+        let mut cmd = tokio::process::Command::new("gh");
         cmd.args([
             "issue",
             "create",
@@ -448,7 +444,7 @@ impl ChatEngine {
                 }
             }
         }
-        let output = cmd.output().map_err(|e| {
+        let output = cmd.output().await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 anyhow::anyhow!("gh CLI not found — install from https://cli.github.com")
             } else {
@@ -463,9 +459,12 @@ impl ChatEngine {
         }
     }
 
-    fn tool_list_agents(&self) -> Result<String> {
+    async fn tool_list_agents(&self) -> Result<String> {
         let mut agents = Vec::new();
-        let entries = std::fs::read_dir(&self.agents_dir)
+        let agents_dir = self.agents_dir.clone();
+        let entries = tokio::task::spawn_blocking(move || std::fs::read_dir(&agents_dir))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
             .map_err(|e| anyhow::anyhow!("cannot read agents dir: {e}"))?;
         for entry in entries.flatten() {
             let path = entry.path();
@@ -949,10 +948,10 @@ impl ChatEngine {
         serde_json::to_string(&results).context("failed to serialize WhatsApp results")
     }
 
-    fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
+    async fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
         let primary_email =
             std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
-        let access_token = match self.get_valid_token(&primary_email) {
+        let access_token = match self.get_valid_token(&primary_email).await {
             Ok(t) => t,
             Err(_) => {
                 // Fall back to kv_config for backward compat.
@@ -973,31 +972,21 @@ impl ChatEngine {
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
 
-        // Call Google Calendar API synchronously via a blocking runtime call.
-        let rt = tokio::runtime::Handle::try_current();
-        let events_json: serde_json::Value = if let Ok(handle) = rt {
-            tokio::task::block_in_place(|| {
-                handle.block_on(async {
-                    let client = reqwest::Client::new();
-                    let url = format!(
-                        "https://www.googleapis.com/calendar/v3/calendars/primary/events\
-                         ?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=20",
-                        time_min, time_max
-                    );
-                    client
-                        .get(&url)
-                        .bearer_auth(&access_token)
-                        .send()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Calendar API request failed: {e}"))?
-                        .json::<serde_json::Value>()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Calendar API parse failed: {e}"))
-                })
-            })?
-        } else {
-            return Ok("Calendar lookup requires async runtime.".to_string());
-        };
+        // Call Google Calendar API.
+        let url = format!(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events\
+             ?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=20",
+            time_min, time_max
+        );
+        let events_json: serde_json::Value = reqwest::Client::new()
+            .get(&url)
+            .bearer_auth(&access_token)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Calendar API request failed: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| anyhow::anyhow!("Calendar API parse failed: {e}"))?;
 
         // Check for auth errors.
         if let Some(err) = events_json.get("error") {
@@ -1043,27 +1032,21 @@ impl ChatEngine {
         Ok(lines.join("\n"))
     }
 
-    fn tool_get_task_lists(&self) -> Result<String> {
+    async fn tool_get_task_lists(&self) -> Result<String> {
         let primary_email =
             std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
-        let access_token = match self.get_valid_token(&primary_email) {
+        let access_token = match self.get_valid_token(&primary_email).await {
             Ok(t) => t,
             Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
         };
 
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| anyhow::anyhow!("No async runtime"))?;
-        let lists: serde_json::Value = tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                reqwest::Client::new()
-                    .get("https://tasks.googleapis.com/tasks/v1/users/@me/lists")
-                    .bearer_auth(&access_token)
-                    .send()
-                    .await?
-                    .json::<serde_json::Value>()
-                    .await
-            })
-        })?;
+        let lists: serde_json::Value = reqwest::Client::new()
+            .get("https://tasks.googleapis.com/tasks/v1/users/@me/lists")
+            .bearer_auth(&access_token)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
 
         if let Some(err) = lists.get("error") {
             return Ok(format!(
@@ -1090,10 +1073,10 @@ impl ChatEngine {
         }
     }
 
-    fn tool_get_tasks(&self, input: &serde_json::Value) -> Result<String> {
+    async fn tool_get_tasks(&self, input: &serde_json::Value) -> Result<String> {
         let primary_email =
             std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
-        let access_token = match self.get_valid_token(&primary_email) {
+        let access_token = match self.get_valid_token(&primary_email).await {
             Ok(t) => t,
             Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
         };
@@ -1114,19 +1097,13 @@ impl ChatEngine {
             url.push_str("&showCompleted=false&showHidden=false");
         }
 
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| anyhow::anyhow!("No async runtime"))?;
-        let resp: serde_json::Value = tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                reqwest::Client::new()
-                    .get(&url)
-                    .bearer_auth(&access_token)
-                    .send()
-                    .await?
-                    .json::<serde_json::Value>()
-                    .await
-            })
-        })?;
+        let resp: serde_json::Value = reqwest::Client::new()
+            .get(&url)
+            .bearer_auth(&access_token)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
 
         if let Some(err) = resp.get("error") {
             return Ok(format!(
@@ -1397,16 +1374,17 @@ impl ChatEngine {
         Ok(format!("Open loop '{}' dismissed.", id))
     }
 
-    fn tool_execute_shell_command(&self, input: &serde_json::Value) -> Result<String> {
+    async fn tool_execute_shell_command(&self, input: &serde_json::Value) -> Result<String> {
         let command = input["command"].as_str().unwrap_or("").trim();
         if command.is_empty() {
             return Ok("Error: 'command' field is required".to_string());
         }
 
-        let output = std::process::Command::new("bash")
+        let output = tokio::process::Command::new("bash")
             .arg("-c")
             .arg(command)
             .output()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to spawn command: {e}"))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1555,6 +1533,7 @@ impl ChatEngine {
                 )) {
                     Ok(tool_name) => self
                         .execute_tool(&tool_name, &tc.arguments)
+                        .await
                         .unwrap_or_else(|e| format!("Error: {e}")),
                     Err(_) => format!("Unknown tool: {}", tc.name),
                 };
