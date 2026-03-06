@@ -79,6 +79,16 @@ pub enum ToolName {
     ListOpenLoops,
     /// Dismiss an open loop.
     DismissOpenLoop,
+    /// Fetch the user's Google Task lists.
+    GetTaskLists,
+    /// Fetch tasks from a Google Task list (default: all incomplete tasks).
+    GetTasks,
+    /// Search iMessage history by contact or keyword (direct read from chat.db).
+    SearchImessages,
+    /// Search macOS Address Book contacts by name, email, or phone.
+    SearchContacts,
+    /// Search WhatsApp Desktop message history by contact or keyword.
+    SearchWhatsapp,
 }
 
 /// A parsed tool call request from the LLM.

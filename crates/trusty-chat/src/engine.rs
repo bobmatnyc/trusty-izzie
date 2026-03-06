@@ -4,9 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use trusty_email::auth::GoogleAuthClient;
 use trusty_models::chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
 use trusty_models::{EventPayload, EventType};
 use trusty_store::SqliteStore;
@@ -157,6 +159,11 @@ impl ChatEngine {
             ToolName::ListWatchSubscriptions => self.tool_list_watch_subscriptions(),
             ToolName::ListOpenLoops => self.tool_list_open_loops(),
             ToolName::DismissOpenLoop => self.tool_dismiss_open_loop(input),
+            ToolName::GetTaskLists => self.tool_get_task_lists(),
+            ToolName::GetTasks => self.tool_get_tasks(input),
+            ToolName::SearchImessages => self.tool_search_imessages(input),
+            ToolName::SearchContacts => self.tool_search_contacts(input),
+            ToolName::SearchWhatsapp => self.tool_search_whatsapp(input),
             _ => Ok("Tool not yet implemented.".to_string()),
         }
     }
@@ -165,6 +172,106 @@ impl ChatEngine {
         self.sqlite
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("Event queue unavailable: no SQLite store attached"))
+    }
+
+    /// Return a valid (non-expired) access token for `user_id`, refreshing if needed.
+    ///
+    /// Refreshes if the token expires within the next 5 minutes. Returns `Err` if
+    /// no token is stored or if the refresh fails.
+    fn get_valid_token(&self, user_id: &str) -> Result<String> {
+        let sqlite = self.sqlite_ref()?;
+        let token = sqlite
+            .get_oauth_token(user_id)?
+            .ok_or_else(|| anyhow::anyhow!("No OAuth token stored for {}", user_id))?;
+
+        // If token has > 5 minutes remaining, return as-is.
+        let needs_refresh = token
+            .expires_at
+            .map(|exp| exp - chrono::Utc::now().timestamp() < 300)
+            .unwrap_or(false);
+
+        if !needs_refresh {
+            return Ok(token.access_token);
+        }
+
+        let refresh_token = token
+            .refresh_token
+            .ok_or_else(|| anyhow::anyhow!("No refresh token for {}; re-auth required", user_id))?;
+
+        let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+        let ngrok =
+            std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
+        let redirect_uri = format!("https://{}/api/auth/google/callback", ngrok);
+
+        let auth = GoogleAuthClient::new(client_id, client_secret, redirect_uri);
+
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| anyhow::anyhow!("No async runtime available for token refresh"))?;
+
+        let new_token = tokio::task::block_in_place(|| {
+            handle.block_on(async { auth.refresh_token(&refresh_token).await })
+        })?;
+
+        let new_expires_at = Some(chrono::Utc::now().timestamp() + new_token.expires_in as i64);
+
+        sqlite.refresh_oauth_token(
+            user_id,
+            &new_token.access_token,
+            new_token.refresh_token.as_deref(),
+            new_expires_at,
+        )?;
+
+        tracing::info!(user_id, "OAuth token refreshed");
+        Ok(new_token.access_token)
+    }
+
+    /// Build a system-prompt section describing the currently connected Google accounts.
+    ///
+    /// Returns an empty string if no SQLite store is attached or no accounts exist.
+    fn load_accounts_context(&self) -> String {
+        let sqlite = match self.sqlite.as_deref() {
+            Some(s) => s,
+            None => return String::new(),
+        };
+
+        let accounts = match sqlite.list_accounts() {
+            Ok(a) => a,
+            Err(_) => return String::new(),
+        };
+
+        let active: Vec<_> = accounts.iter().filter(|a| a.is_active).collect();
+        if active.is_empty() {
+            return String::new();
+        }
+
+        let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
+            .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+
+        let mut lines = vec!["## Connected Google Accounts".to_string()];
+        for acc in &active {
+            // Primary account has full scope (Calendar, Tasks, Drive, Gmail).
+            // Secondary accounts were added with Gmail + userinfo scope only.
+            let capabilities = if acc.email == primary_email {
+                "Gmail · Calendar · Tasks · Drive"
+            } else {
+                "Gmail only"
+            };
+            let role = if acc.account_type == "primary" {
+                "primary"
+            } else {
+                "secondary"
+            };
+            lines.push(format!("- **{}** ({}) — {}", acc.email, role, capabilities));
+        }
+        lines.push(String::new());
+        lines.push(format!(
+            "Calendar and Tasks always use **{}** (the only account with those scopes).",
+            primary_email
+        ));
+        lines.push("Email relationship context covers all connected accounts.".to_string());
+
+        lines.join("\n")
     }
 
     fn tool_schedule_event(&self, input: &serde_json::Value) -> Result<String> {
@@ -527,18 +634,330 @@ impl ChatEngine {
         Ok("WhatsApp sync queued. I'll read your WhatsApp message history and extract relationship context.".to_string())
     }
 
-    fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
-        let sqlite = self.sqlite_ref()?;
+    fn tool_search_imessages(&self, input: &serde_json::Value) -> Result<String> {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let db_path = format!("{}/Library/Messages/chat.db", home);
 
-        // Resolve access token: try oauth_tokens table first, then kv_config fallback.
+        let contact = input["contact"].as_str().filter(|s| !s.is_empty());
+        let query = input["query"].as_str().filter(|s| !s.is_empty());
+        let limit = input["limit"].as_i64().unwrap_or(20).clamp(1, 50);
+        let days_back = input["days_back"].as_i64().unwrap_or(30);
+        let from_me = input["from_me"].as_bool();
+
+        let conn = match Connection::open_with_flags(
+            &db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing iMessage database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        let mut sql = String::from(
+            "SELECT m.rowid, m.text, m.is_from_me, \
+             datetime(m.date/1000000000 + 978307200, 'unixepoch') as sent_at, \
+             h.id as contact \
+             FROM message m \
+             JOIN handle h ON m.handle_id = h.rowid \
+             WHERE m.text IS NOT NULL \
+             AND m.date/1000000000 + 978307200 > unixepoch() - ?*86400",
+        );
+
+        if from_me.is_some() {
+            sql.push_str(" AND m.is_from_me = ?");
+        }
+        if contact.is_some() {
+            sql.push_str(" AND h.id LIKE ?");
+        }
+        if query.is_some() {
+            sql.push_str(" AND m.text LIKE ?");
+        }
+        sql.push_str(" ORDER BY m.date DESC LIMIT ?");
+
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing iMessage database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        // Build params list dynamically.
+        let contact_pattern = contact.map(|c| format!("%{}%", c));
+        let query_pattern = query.map(|q| format!("%{}%", q));
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        params.push(Box::new(days_back));
+        if let Some(fm) = from_me {
+            params.push(Box::new(fm as i32));
+        }
+        if let Some(ref cp) = contact_pattern {
+            params.push(Box::new(cp.clone()));
+        }
+        if let Some(ref qp) = query_pattern {
+            params.push(Box::new(qp.clone()));
+        }
+        params.push(Box::new(limit));
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        let rows = match stmt.query(params_refs.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing iMessage database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        let mut results = Vec::new();
+        let mut rows = rows;
+        while let Ok(Some(row)) = rows.next() {
+            let rowid: i64 = row.get(0).unwrap_or(0);
+            let text: String = row.get(1).unwrap_or_default();
+            let is_from_me: i32 = row.get(2).unwrap_or(0);
+            let sent_at: String = row.get(3).unwrap_or_default();
+            let contact_id: String = row.get(4).unwrap_or_default();
+            results.push(serde_json::json!({
+                "rowid": rowid,
+                "text": text,
+                "is_from_me": is_from_me == 1,
+                "sent_at": sent_at,
+                "contact": contact_id,
+            }));
+        }
+
+        serde_json::to_string(&results).context("failed to serialize iMessage results")
+    }
+
+    fn tool_search_contacts(&self, input: &serde_json::Value) -> Result<String> {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let db_path = format!(
+            "{}/Library/Application Support/AddressBook/AddressBook-v22.abcddb",
+            home
+        );
+
+        let query = input["query"].as_str().unwrap_or("").trim();
+        if query.is_empty() {
+            return Ok("Error: query is required for search_contacts".to_string());
+        }
+        let limit = input["limit"].as_i64().unwrap_or(10).clamp(1, 100);
+        let pattern = format!("%{}%", query);
+
+        let conn = match Connection::open_with_flags(
+            &db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing Contacts database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        let sql = "SELECT r.Z_PK, r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, r.ZJOBTITLE, \
+                   GROUP_CONCAT(DISTINCT p.ZFULLNUMBER) as phones, \
+                   GROUP_CONCAT(DISTINCT e.ZADDRESS) as emails \
+                   FROM ZABCDRECORD r \
+                   LEFT JOIN ZABCDPHONENUMBER p ON p.ZOWNER = r.Z_PK \
+                   LEFT JOIN ZABCDEMAILADDRESS e ON e.ZOWNER = r.Z_PK \
+                   WHERE r.ZFIRSTNAME LIKE ?1 OR r.ZLASTNAME LIKE ?1 \
+                      OR r.ZORGANIZATION LIKE ?1 \
+                      OR p.ZFULLNUMBER LIKE ?1 \
+                      OR e.ZADDRESS LIKE ?1 \
+                   GROUP BY r.Z_PK \
+                   LIMIT ?2";
+
+        let mut stmt = match conn.prepare(sql) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing Contacts database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        let rows = match stmt.query(rusqlite::params![pattern, limit]) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing Contacts database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        let mut results = Vec::new();
+        let mut rows = rows;
+        while let Ok(Some(row)) = rows.next() {
+            let first: Option<String> = row.get(1).ok();
+            let last: Option<String> = row.get(2).ok();
+            let org: Option<String> = row.get(3).ok();
+            let job: Option<String> = row.get(4).ok();
+            let phones_str: Option<String> = row.get(5).ok().flatten();
+            let emails_str: Option<String> = row.get(6).ok().flatten();
+
+            let name = match (first, last) {
+                (Some(f), Some(l)) => format!("{} {}", f, l),
+                (Some(f), None) => f,
+                (None, Some(l)) => l,
+                (None, None) => String::new(),
+            };
+
+            let phones: Vec<&str> = phones_str
+                .as_deref()
+                .map(|s| s.split(',').collect())
+                .unwrap_or_default();
+            let emails: Vec<&str> = emails_str
+                .as_deref()
+                .map(|s| s.split(',').collect())
+                .unwrap_or_default();
+
+            let mut entry = serde_json::json!({ "name": name });
+            if let Some(o) = org {
+                entry["organization"] = serde_json::Value::String(o);
+            }
+            if let Some(j) = job {
+                entry["job_title"] = serde_json::Value::String(j);
+            }
+            if !phones.is_empty() {
+                entry["phones"] = serde_json::json!(phones);
+            }
+            if !emails.is_empty() {
+                entry["emails"] = serde_json::json!(emails);
+            }
+            results.push(entry);
+        }
+
+        serde_json::to_string(&results).context("failed to serialize contact results")
+    }
+
+    fn tool_search_whatsapp(&self, input: &serde_json::Value) -> Result<String> {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let db_path = format!(
+            "{}/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite",
+            home
+        );
+
+        let contact = input["contact"].as_str().filter(|s| !s.is_empty());
+        let query = input["query"].as_str().filter(|s| !s.is_empty());
+        let limit = input["limit"].as_i64().unwrap_or(20).clamp(1, 50);
+        let days_back = input["days_back"].as_i64().unwrap_or(30);
+
+        let conn = match Connection::open_with_flags(
+            &db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing WhatsApp database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        let mut sql = String::from(
+            "SELECT m.ZTEXT as text, m.ZISFROMME as is_from_me, \
+             datetime(m.ZMESSAGEDATE + 978307200, 'unixepoch') as sent_at, \
+             s.ZPARTNERNAME as contact, s.ZCONTACTJID as jid, \
+             s.ZSESSIONTYPE as chat_type \
+             FROM ZWAMESSAGE m \
+             JOIN ZWACHATSESSION s ON m.ZCHATSESSION = s.Z_PK \
+             WHERE m.ZTEXT IS NOT NULL \
+             AND m.ZMESSAGEDATE + 978307200 > unixepoch() - ?*86400",
+        );
+
+        if contact.is_some() {
+            sql.push_str(" AND (s.ZPARTNERNAME LIKE ? OR s.ZCONTACTJID LIKE ?)");
+        }
+        if query.is_some() {
+            sql.push_str(" AND m.ZTEXT LIKE ?");
+        }
+        sql.push_str(" ORDER BY m.ZMESSAGEDATE DESC LIMIT ?");
+
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing WhatsApp database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        let contact_pattern = contact.map(|c| format!("%{}%", c));
+        let query_pattern = query.map(|q| format!("%{}%", q));
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        params.push(Box::new(days_back));
+        if let Some(ref cp) = contact_pattern {
+            params.push(Box::new(cp.clone()));
+            params.push(Box::new(cp.clone()));
+        }
+        if let Some(ref qp) = query_pattern {
+            params.push(Box::new(qp.clone()));
+        }
+        params.push(Box::new(limit));
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        let rows = match stmt.query(params_refs.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(format!(
+                    "Error accessing WhatsApp database: {}. Make sure Izzie has Full Disk Access in System Settings > Privacy & Security.",
+                    e
+                ))
+            }
+        };
+
+        let mut results = Vec::new();
+        let mut rows = rows;
+        while let Ok(Some(row)) = rows.next() {
+            let text: String = row.get(0).unwrap_or_default();
+            let is_from_me: i32 = row.get(1).unwrap_or(0);
+            let sent_at: String = row.get(2).unwrap_or_default();
+            let contact_name: String = row.get(3).unwrap_or_default();
+            let jid: String = row.get(4).unwrap_or_default();
+            let chat_type: i32 = row.get(5).unwrap_or(0);
+            results.push(serde_json::json!({
+                "text": text,
+                "is_from_me": is_from_me == 1,
+                "sent_at": sent_at,
+                "contact": contact_name,
+                "jid": jid,
+                "chat_type": chat_type,
+            }));
+        }
+
+        serde_json::to_string(&results).context("failed to serialize WhatsApp results")
+    }
+
+    fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
         let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
             .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
-        let access_token = if let Ok(Some(tok)) = sqlite.get_oauth_token(&primary_email) {
-            tok.access_token
-        } else if let Ok(Some(tok)) = sqlite.get_config("google_access_token") {
-            tok
-        } else {
-            return Ok("I don't have a Google access token yet. Use /auth in Telegram to connect your Google account.".to_string());
+        let access_token = match self.get_valid_token(&primary_email) {
+            Ok(t) => t,
+            Err(_) => {
+                // Fall back to kv_config for backward compat.
+                match self.sqlite_ref()?.get_config("google_access_token")? {
+                    Some(t) if !t.is_empty() => t,
+                    _ => return Ok(
+                        "I don't have a Google access token yet. Use /auth in Telegram or ask me to `add_account` to connect your Google account.".to_string()
+                    ),
+                }
+            }
         };
 
         // Parse optional parameters.
@@ -617,6 +1036,126 @@ impl ChatEngine {
             lines.push(line);
         }
         Ok(lines.join("\n"))
+    }
+
+    fn tool_get_task_lists(&self) -> Result<String> {
+        let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
+            .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+        let access_token = match self.get_valid_token(&primary_email) {
+            Ok(t) => t,
+            Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
+        };
+
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| anyhow::anyhow!("No async runtime"))?;
+        let lists: serde_json::Value = tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                reqwest::Client::new()
+                    .get("https://tasks.googleapis.com/tasks/v1/users/@me/lists")
+                    .bearer_auth(&access_token)
+                    .send()
+                    .await?
+                    .json::<serde_json::Value>()
+                    .await
+            })
+        })?;
+
+        if let Some(err) = lists.get("error") {
+            return Ok(format!(
+                "Tasks API error: {}",
+                err["message"].as_str().unwrap_or("unknown")
+            ));
+        }
+
+        let items = lists["items"].as_array();
+        match items.map(|v| v.as_slice()) {
+            None | Some([]) => Ok("No task lists found.".to_string()),
+            Some(lists) => {
+                let result: Vec<serde_json::Value> = lists
+                    .iter()
+                    .map(|l| {
+                        serde_json::json!({
+                            "id": l["id"].as_str().unwrap_or(""),
+                            "title": l["title"].as_str().unwrap_or("(untitled)"),
+                        })
+                    })
+                    .collect();
+                serde_json::to_string(&result).context("failed to serialize task lists")
+            }
+        }
+    }
+
+    fn tool_get_tasks(&self, input: &serde_json::Value) -> Result<String> {
+        let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
+            .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+        let access_token = match self.get_valid_token(&primary_email) {
+            Ok(t) => t,
+            Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
+        };
+
+        // Optional: caller can specify a list ID; defaults to "@default".
+        let list_id = input["list_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("@default");
+        let show_completed = input["show_completed"].as_bool().unwrap_or(false);
+        let max_results = input["max_results"].as_i64().unwrap_or(20).clamp(1, 100);
+
+        let mut url = format!(
+            "https://tasks.googleapis.com/tasks/v1/lists/{}/tasks?maxResults={}",
+            list_id, max_results
+        );
+        if !show_completed {
+            url.push_str("&showCompleted=false&showHidden=false");
+        }
+
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| anyhow::anyhow!("No async runtime"))?;
+        let resp: serde_json::Value = tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                reqwest::Client::new()
+                    .get(&url)
+                    .bearer_auth(&access_token)
+                    .send()
+                    .await?
+                    .json::<serde_json::Value>()
+                    .await
+            })
+        })?;
+
+        if let Some(err) = resp.get("error") {
+            return Ok(format!(
+                "Tasks API error: {}",
+                err["message"].as_str().unwrap_or("unknown")
+            ));
+        }
+
+        let items = resp["items"].as_array();
+        match items.map(|v| v.as_slice()) {
+            None | Some([]) => Ok(format!("No tasks found in list '{}'.", list_id)),
+            Some(tasks) => {
+                let mut lines = vec![format!("Tasks from '{}':", list_id)];
+                for task in tasks {
+                    let title = task["title"].as_str().unwrap_or("(untitled)");
+                    let status = task["status"].as_str().unwrap_or("needsAction");
+                    let due = task["due"].as_str().unwrap_or("");
+                    let notes = task["notes"].as_str().unwrap_or("");
+                    let status_icon = if status == "completed" { "✓" } else { "○" };
+                    let mut line = format!("{} {}", status_icon, title);
+                    if !due.is_empty() {
+                        // Parse and reformat the due date (RFC3339)
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(due) {
+                            line.push_str(&format!(" (due {})", dt.format("%b %d")));
+                        }
+                    }
+                    if !notes.is_empty() {
+                        line.push_str(&format!(" — {}", &notes[..notes.len().min(80)]));
+                    }
+                    lines.push(line);
+                }
+                Ok(lines.join("\n"))
+            }
+        }
     }
 
     fn tool_list_accounts(&self) -> Result<String> {
@@ -918,7 +1457,8 @@ impl ChatEngine {
         let ctx = self.context_assembler.assemble(user_message, "").await?;
         let context_section = self.context_assembler.render_context(&ctx);
         let now = chrono::Utc::now();
-        let system_content = system_prompt(now, &context_section);
+        let accounts_context = self.load_accounts_context();
+        let system_content = system_prompt(now, &context_section, &accounts_context);
 
         // 3. Build the LLM message array from session history.
         let mut llm_messages: Vec<OrchatMessage> = vec![OrchatMessage {
@@ -1048,7 +1588,7 @@ impl ChatEngine {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str) -> String {
+fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str, accounts_ctx: &str) -> String {
     let user_email =
         std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| "bob@matsuoka.com".to_string());
     let user_name = std::env::var("TRUSTY_USER_NAME").unwrap_or_else(|_| "Masa".to_string());
@@ -1056,6 +1596,11 @@ fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str) -> String {
         String::new()
     } else {
         format!("\n\n{}", context)
+    };
+    let accounts_section = if accounts_ctx.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", accounts_ctx)
     };
     format!(
         r#"You are trusty-izzie, a personal AI assistant with deep knowledge of the user's professional relationships and work context. You run locally on the user's machine.
@@ -1068,7 +1613,7 @@ Today is {}. Current time: {}.
 - **Timezone**: America/New_York (EDT, UTC-5)
 - You are their personal assistant. Address them by name when appropriate. When they ask who they are or about themselves, use this information.
 - **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, or local contacts.
-{context_section}
+{context_section}{accounts_section}
 
 ## My Deployment
 
@@ -1079,12 +1624,10 @@ I am trusty-izzie v{}, running as macOS launchd services:
 
 I can check my own service status with `check_service_status`, report my version with `get_version`, and file GitHub issues with `submit_github_issue`.
 
-## Email Accounts
-I learn from email sent from multiple Google accounts. Use `list_accounts` to see all registered accounts, `add_account` to add a new Google account (I'll return an OAuth URL to visit), or `remove_account` to stop syncing a secondary account.
-
 ## What I Can Do
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7).
+- **Google Tasks**: I can list task lists via `get_task_lists` and fetch tasks via `get_tasks`.
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
@@ -1096,10 +1639,12 @@ I learn from email sent from multiple Google accounts. Use `list_accounts` to se
 - `run_agent` — enqueue a background research agent task
 - `list_agents` — list available agent definitions
 - `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30)
+- `get_task_lists` — list the user's Google Task lists (uses bob@matsuoka.com)
+- `get_tasks` — fetch tasks from a list (optional: list_id, max_results, show_completed; default: incomplete tasks from primary list)
 - `get_agent_task` — get the status and output of an agent task by ID
-- `list_accounts` — list all registered Google accounts
-- `add_account` — add a Google account (returns OAuth URL; account registered after user consents)
-- `remove_account` — deactivate a secondary Google account (stops syncing it)
+- `list_accounts` — list connected Google accounts and their sync status
+- `add_account` — add a new Google account (returns OAuth URL; run `/auth` in Telegram for full scope including Calendar and Tasks)
+- `remove_account` — deactivate a secondary account
 - `sync_contacts` — queue a macOS AddressBook contacts sync
 - `execute_shell_command` — run a bash shell command on this Mac and return stdout/stderr
 - `get_preferences` — view current proactive feature settings
@@ -1108,6 +1653,9 @@ I learn from email sent from multiple Google accounts. Use `list_accounts` to se
 - `add_watch_subscription` / `remove_watch_subscription` / `list_watch_subscriptions` — monitor topics
 - `list_open_loops` — see pending follow-ups
 - `dismiss_open_loop` — dismiss a follow-up reminder
+- `search_imessages`: Search iMessage history. Params: contact (string, partial match), query (keyword in text), limit (default 20), days_back (default 30), from_me (bool). Returns array of messages with contact, text, timestamp.
+- `search_contacts`: Search macOS Address Book. Params: query (name/email/phone, required), limit (default 10). Returns contacts with name, phones, emails, organization.
+- `search_whatsapp`: Search WhatsApp messages. Params: contact (string, partial match), query (keyword), limit (default 20), days_back (default 30). Returns messages with contact, text, timestamp.
 
 ## Proactive Features
 I proactively send you briefings and updates. You can customize these:
@@ -1141,10 +1689,14 @@ After tool results are injected into the conversation, give your final answer wi
 NEVER fabricate factual information. For these topics you MUST call the appropriate tool — never answer from memory or training data:
 - Calendar / schedule / meetings → `get_calendar_events`
 - Scheduled tasks / reminders / events → `list_events`
+- Tasks / to-dos → `get_tasks` or `get_task_lists`
 - Google accounts → `list_accounts`
 - Service health / running processes → `check_service_status`
 - Any file system, shell, or system state query → `execute_shell_command`
 - User preferences → `get_preferences`
+- Contact info (phone, email, address) → `search_contacts` ALWAYS before answering
+- iMessage history → `search_imessages` ALWAYS; never fabricate message content
+- WhatsApp history → `search_whatsapp` ALWAYS; never fabricate message content
 
 If a tool returns no data (e.g. no calendar events), say so honestly. Never invent meetings, contacts, emails, or any factual data.
 
@@ -1273,7 +1825,7 @@ mod tests {
     #[test]
     fn test_system_prompt_contains_date() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "");
+        let prompt = system_prompt(now, "", "");
         let year = now.format("%Y").to_string();
         assert!(prompt.contains(&year));
     }
@@ -1284,6 +1836,7 @@ mod tests {
         let prompt = system_prompt(
             now,
             "## Relevant People & Projects\n- Alice (Person): alice",
+            "",
         );
         assert!(prompt.contains("## Relevant People & Projects"));
     }
@@ -1291,7 +1844,7 @@ mod tests {
     #[test]
     fn test_system_prompt_no_context_section_when_empty() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "");
+        let prompt = system_prompt(now, "", "");
         assert!(!prompt.contains("## Relevant"));
     }
 

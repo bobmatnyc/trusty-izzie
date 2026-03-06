@@ -7466,6 +7466,7 @@ dependencies = [
  "chrono",
  "futures",
  "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

@@ -14,6 +14,7 @@ trusty-extractor = { path = "../trusty-extractor" }
 trusty-email = { path = "../trusty-email" }
 
 reqwest = { workspace = true }
+rusqlite = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

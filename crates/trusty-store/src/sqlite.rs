@@ -270,6 +270,29 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Update an existing OAuth token row after a token refresh.
+    ///
+    /// Only updates `access_token`, `refresh_token`, and `expires_at`.
+    /// The `scopes` column is intentionally left unchanged.
+    pub fn refresh_oauth_token(
+        &self,
+        user_id: &str,
+        access_token: &str,
+        refresh_token: Option<&str>,
+        expires_at: Option<i64>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            r#"UPDATE oauth_tokens
+               SET access_token  = ?1,
+                   refresh_token = COALESCE(?2, refresh_token),
+                   expires_at    = ?3
+               WHERE user_id = ?4"#,
+            rusqlite::params![access_token, refresh_token, expires_at, user_id],
+        )?;
+        Ok(())
+    }
+
     /// Retrieve the stored OAuth2 access token for `user_id`.
     pub fn get_access_token(&self, user_id: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
