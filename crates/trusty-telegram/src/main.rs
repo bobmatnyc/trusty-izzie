@@ -122,9 +122,13 @@ fn expand_tilde(path: &str) -> PathBuf {
 }
 
 /// Call the Telegram Bot API `setWebhook` endpoint.
-async fn api_set_webhook(token: &str, url: &str, secret_token: Option<&str>) -> Result<()> {
+async fn api_set_webhook(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+    secret_token: Option<&str>,
+) -> Result<()> {
     let endpoint = format!("https://api.telegram.org/bot{token}/setWebhook");
-    let client = reqwest::Client::new();
     let mut body = serde_json::json!({ "url": url });
     if let Some(s) = secret_token {
         body["secret_token"] = serde_json::json!(s);
@@ -147,9 +151,8 @@ async fn api_set_webhook(token: &str, url: &str, secret_token: Option<&str>) -> 
 }
 
 /// Call the Telegram Bot API `deleteWebhook` endpoint.
-async fn api_delete_webhook(token: &str) -> Result<()> {
+async fn api_delete_webhook(client: &reqwest::Client, token: &str) -> Result<()> {
     let endpoint = format!("https://api.telegram.org/bot{token}/deleteWebhook");
-    let client = reqwest::Client::new();
     let resp: serde_json::Value = client.post(&endpoint).send().await?.json().await?;
     if resp["ok"].as_bool().unwrap_or(false) {
         info!("Webhook cleared");
@@ -164,12 +167,11 @@ async fn api_delete_webhook(token: &str) -> Result<()> {
 /// Send a chat action (e.g. "typing"). Fire-and-forget — never fails the caller.
 /// Reverse-geocode lat/lon to a human-readable place name via Nominatim.
 /// Returns e.g. "Berlin, Germany" or falls back to raw coordinates.
-async fn reverse_geocode(lat: f64, lon: f64) -> String {
+async fn reverse_geocode(client: &reqwest::Client, lat: f64, lon: f64) -> String {
     let url = format!(
         "https://nominatim.openstreetmap.org/reverse?format=json&lat={}&lon={}&zoom=10",
         lat, lon
     );
-    let client = reqwest::Client::new();
     let resp = client
         .get(&url)
         .header("User-Agent", "trusty-izzie/1.0")
@@ -198,9 +200,9 @@ async fn reverse_geocode(lat: f64, lon: f64) -> String {
     format!("{:.4}°, {:.4}°", lat, lon)
 }
 
-async fn send_chat_action(token: &str, chat_id: i64, action: &str) {
+async fn send_chat_action(client: &reqwest::Client, token: &str, chat_id: i64, action: &str) {
     let endpoint = format!("https://api.telegram.org/bot{token}/sendChatAction");
-    let _ = reqwest::Client::new()
+    let _ = client
         .post(&endpoint)
         .json(&serde_json::json!({"chat_id": chat_id, "action": action}))
         .send()
@@ -210,6 +212,7 @@ async fn send_chat_action(token: &str, chat_id: i64, action: &str) {
 /// Send a message. Returns the Telegram message_id for later editing.
 /// Uses a two-attempt approach: try with parse_mode first, then plain text on 400.
 async fn send_message(
+    client: &reqwest::Client,
     token: &str,
     chat_id: i64,
     text: &str,
@@ -228,7 +231,7 @@ async fn send_message(
     if let Some(rid) = reply_to_message_id {
         body["reply_to_message_id"] = serde_json::Value::Number(rid.into());
     }
-    let resp: serde_json::Value = reqwest::Client::new()
+    let resp: serde_json::Value = client
         .post(&endpoint)
         .json(&body)
         .send()
@@ -246,7 +249,7 @@ async fn send_message(
             if let Some(rid) = reply_to_message_id {
                 plain_body["reply_to_message_id"] = serde_json::Value::Number(rid.into());
             }
-            let plain_resp: serde_json::Value = reqwest::Client::new()
+            let plain_resp: serde_json::Value = client
                 .post(&endpoint)
                 .json(&plain_body)
                 .send()
@@ -267,6 +270,7 @@ async fn send_message(
 
 /// Edit an existing message (for progress updates -> final reply).
 async fn edit_message_text(
+    client: &reqwest::Client,
     token: &str,
     chat_id: i64,
     message_id: i64,
@@ -283,7 +287,7 @@ async fn edit_message_text(
     if !parse_mode.is_empty() {
         body["parse_mode"] = serde_json::Value::String(parse_mode.to_string());
     }
-    let resp: serde_json::Value = reqwest::Client::new()
+    let resp: serde_json::Value = client
         .post(&endpoint)
         .json(&body)
         .send()
@@ -299,11 +303,7 @@ async fn edit_message_text(
                 "text": text,
                 "disable_web_page_preview": true,
             });
-            let _ = reqwest::Client::new()
-                .post(&endpoint)
-                .json(&plain_body)
-                .send()
-                .await;
+            let _ = client.post(&endpoint).json(&plain_body).send().await;
             return Ok(());
         }
         let desc = resp["description"].as_str().unwrap_or("unknown");
@@ -314,9 +314,9 @@ async fn edit_message_text(
 
 /// Delete a message (e.g. remove progress placeholder).
 #[allow(dead_code)]
-async fn delete_message(token: &str, chat_id: i64, message_id: i64) {
+async fn delete_message(client: &reqwest::Client, token: &str, chat_id: i64, message_id: i64) {
     let endpoint = format!("https://api.telegram.org/bot{token}/deleteMessage");
-    let _ = reqwest::Client::new()
+    let _ = client
         .post(&endpoint)
         .json(&serde_json::json!({"chat_id": chat_id, "message_id": message_id}))
         .send()
@@ -353,6 +353,7 @@ fn chunk_text(text: &str, max_len: usize) -> Vec<String> {
 /// Uses HTML parse_mode; falls back to plain text if HTML parse fails.
 /// Returns the message_id of the LAST sent message.
 async fn send_reply_smart(
+    client: &reqwest::Client,
     token: &str,
     chat_id: i64,
     text: &str,
@@ -363,7 +364,7 @@ async fn send_reply_smart(
     let mut last_id = 0i64;
     for (i, chunk) in chunks.iter().enumerate() {
         let rid = if i == 0 { reply_to_message_id } else { None };
-        last_id = send_message(token, chat_id, chunk, rid, "HTML")
+        last_id = send_message(client, token, chat_id, chunk, rid, "HTML")
             .await
             .unwrap_or(0);
     }
@@ -371,16 +372,21 @@ async fn send_reply_smart(
 }
 
 /// Backward-compat wrapper used for simple notifications (auth, errors, etc.)
-async fn send_reply(token: &str, chat_id: i64, text: &str) -> Result<()> {
-    send_message(token, chat_id, text, None, "")
+async fn send_reply(client: &reqwest::Client, token: &str, chat_id: i64, text: &str) -> Result<()> {
+    send_message(client, token, chat_id, text, None, "")
         .await
         .map(|_| ())
 }
 
 /// Send a "progress" placeholder message; returns its message_id for later editing.
 #[allow(dead_code)]
-async fn send_progress_message(token: &str, chat_id: i64, reply_to: i64) -> i64 {
-    send_message(token, chat_id, "…", Some(reply_to), "")
+async fn send_progress_message(
+    client: &reqwest::Client,
+    token: &str,
+    chat_id: i64,
+    reply_to: i64,
+) -> i64 {
+    send_message(client, token, chat_id, "…", Some(reply_to), "")
         .await
         .unwrap_or(0)
 }
@@ -450,6 +456,7 @@ struct WebhookState {
     gdrive_token: Option<String>,
     memory_store: Arc<MemoryStore>,
     session_manager: Arc<SessionManager>,
+    http: reqwest::Client,
 }
 
 async fn health_handler() -> StatusCode {
@@ -579,8 +586,8 @@ async fn oauth_callback_handler(
     let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = state
+        .http
         .post("https://oauth2.googleapis.com/token")
         .form(&[
             ("code", code.as_str()),
@@ -641,8 +648,8 @@ async fn oauth_callback_handler(
     let refresh_token = body["refresh_token"].as_str().unwrap_or("").to_string();
 
     // Resolve the authenticated email via Google userinfo.
-    let userinfo_client = reqwest::Client::new();
-    let auth_email = match userinfo_client
+    let auth_email = match state
+        .http
         .get("https://www.googleapis.com/oauth2/v3/userinfo")
         .bearer_auth(&access_token)
         .send()
@@ -724,9 +731,11 @@ async fn oauth_callback_handler(
                     .sqlite
                     .set_config("oauth_pending_identity_email", &auth_email);
                 let tok = state.bot_token.clone();
+                let http_notify = state.http.clone();
                 let auth_email_notify = auth_email.clone();
                 tokio::spawn(async move {
                     let _ = send_message(
+                        &http_notify,
                         &tok,
                         cid,
                         &format!(
@@ -789,8 +798,9 @@ async fn webhook_handler(
         let uid = sender_user_id.unwrap_or(0);
         if !state.allowed_users.contains(&uid) {
             let token = state.bot_token.clone();
+            let http = state.http.clone();
             tokio::spawn(async move {
-                let _ = send_reply(&token, chat_id, "Not authorized.").await;
+                let _ = send_reply(&http, &token, chat_id, "Not authorized.").await;
             });
             return StatusCode::OK;
         }
@@ -827,6 +837,7 @@ async fn webhook_handler(
         let min_occ = state.min_occurrences;
         let gdrive_token = state.gdrive_token.clone();
         let token = state.bot_token.clone();
+        let http_doc = state.http.clone();
 
         tokio::spawn(async move {
             let source_ctx = format!(
@@ -834,7 +845,8 @@ async fn webhook_handler(
                 doc.file_name.as_deref().unwrap_or("unknown")
             );
             // Download the document bytes via the Telegram getFile API.
-            let doc_text = download_and_extract_document_text(&token, &doc, chat_id).await;
+            let doc_text =
+                download_and_extract_document_text(&http_doc, &token, &doc, chat_id).await;
 
             if let Some(text) = doc_text {
                 let combined = if caption.is_empty() {
@@ -872,13 +884,14 @@ async fn webhook_handler(
 
     // Handle Telegram location share (GPS coordinates).
     if let Some(loc) = &msg.location {
-        let place = reverse_geocode(loc.latitude, loc.longitude).await;
+        let place = reverse_geocode(&state.http, loc.latitude, loc.longitude).await;
         let memory_content = format!("User's current location: {}", place);
         let sqlite_loc = state.sqlite.clone();
         let place_clone = place.clone();
         let mem_store_loc = Arc::clone(&state.memory_store);
         let user_id_loc = state.user_context.user_id.clone();
         let token_loc = state.bot_token.clone();
+        let http_loc = state.http.clone();
         tokio::spawn(async move {
             // Persist location as a short-lived memory and as a kv_config entry.
             let _ = mem_store_loc
@@ -898,7 +911,15 @@ async fn webhook_handler(
             .await;
             // Acknowledge the location share.
             let ack = format!("📍 Got it — I've noted you're in <b>{}</b>.", place_for_ack);
-            let _ = send_message(&token_loc, chat_id, &ack, Some(message_id), "HTML").await;
+            let _ = send_message(
+                &http_loc,
+                &token_loc,
+                chat_id,
+                &ack,
+                Some(message_id),
+                "HTML",
+            )
+            .await;
         });
         return StatusCode::OK;
     }
@@ -911,9 +932,10 @@ async fn webhook_handler(
     // 1. Show typing indicator immediately (fire-and-forget).
     {
         let tok_clone = state.bot_token.clone();
+        let http_typing = state.http.clone();
         let chat_id_copy = chat_id;
         tokio::spawn(async move {
-            send_chat_action(&tok_clone, chat_id_copy, "typing").await;
+            send_chat_action(&http_typing, &tok_clone, chat_id_copy, "typing").await;
         });
     }
 
@@ -932,8 +954,10 @@ async fn webhook_handler(
             .sqlite
             .set_config("oauth_pending_chat_id", &chat_id.to_string());
         let token = state.bot_token.clone();
+        let http_auth = state.http.clone();
         tokio::spawn(async move {
             let _ = send_reply(
+                &http_auth,
                 &token,
                 chat_id,
                 &format!(
@@ -971,8 +995,11 @@ async fn webhook_handler(
                     "Got it — <b>{pending_email}</b> is your {label} account. I'll use it for {purpose}."
                 );
                 let tok = state.bot_token.clone();
+                let http_ident = state.http.clone();
                 tokio::spawn(async move {
-                    let _ = send_message(&tok, chat_id, &ack, Some(message_id), "HTML").await;
+                    let _ =
+                        send_message(&http_ident, &tok, chat_id, &ack, Some(message_id), "HTML")
+                            .await;
                 });
                 return StatusCode::OK;
             }
@@ -982,6 +1009,7 @@ async fn webhook_handler(
     // Process chat asynchronously — respond 200 immediately to Telegram.
     let engine = Arc::clone(&state.engine);
     let token = state.bot_token.clone();
+    let http_chat = state.http.clone();
     let extractor = Arc::clone(&state.extractor);
     let store = Arc::clone(&state.store);
     let sqlite_log = Arc::clone(&state.sqlite);
@@ -1013,9 +1041,19 @@ async fn webhook_handler(
                 "Just chat naturally — no commands needed for most things."
             );
             if progress_id > 0 {
-                let _ = edit_message_text(&token, chat_id, progress_id, help_text, "HTML").await;
+                let _ =
+                    edit_message_text(&http_chat, &token, chat_id, progress_id, help_text, "HTML")
+                        .await;
             } else {
-                let _ = send_message(&token, chat_id, help_text, Some(message_id), "HTML").await;
+                let _ = send_message(
+                    &http_chat,
+                    &token,
+                    chat_id,
+                    help_text,
+                    Some(message_id),
+                    "HTML",
+                )
+                .await;
             }
             return;
         }
@@ -1045,6 +1083,7 @@ async fn webhook_handler(
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         {
             let tok_hb = token.clone();
+            let http_hb = http_chat.clone();
             let chat_id_copy = chat_id;
             tokio::spawn(async move {
                 let mut cancel_rx = cancel_rx;
@@ -1052,7 +1091,7 @@ async fn webhook_handler(
                     tokio::select! {
                         _ = &mut cancel_rx => break,
                         _ = tokio::time::sleep(tokio::time::Duration::from_secs(4)) => {
-                            send_chat_action(&tok_hb, chat_id_copy, "typing").await;
+                            send_chat_action(&http_hb, &tok_hb, chat_id_copy, "typing").await;
                         }
                     }
                 }
@@ -1079,7 +1118,8 @@ async fn webhook_handler(
                     &response.reply
                 };
                 // 4. Send reply (no placeholder message — typing indicator in header handles UX).
-                let _ = send_reply_smart(&token, chat_id, reply_text, Some(message_id)).await;
+                let _ = send_reply_smart(&http_chat, &token, chat_id, reply_text, Some(message_id))
+                    .await;
 
                 if let Err(e) = sqlite_log
                     .log_telegram_interaction("outbound", chat_id, None, None, reply_text, None)
@@ -1125,9 +1165,11 @@ async fn webhook_handler(
                 error!("Chat error: {e}");
                 let err_text = "Sorry, I encountered an error processing your message.";
                 if progress_id > 0 {
-                    let _ = edit_message_text(&token, chat_id, progress_id, err_text, "").await;
+                    let _ =
+                        edit_message_text(&http_chat, &token, chat_id, progress_id, err_text, "")
+                            .await;
                 } else {
-                    let _ = send_reply(&token, chat_id, err_text).await;
+                    let _ = send_reply(&http_chat, &token, chat_id, err_text).await;
                 }
             }
         }
@@ -1230,12 +1272,12 @@ async fn extract_gdoc_text(text: &str, access_token: &str) -> Option<String> {
 ///
 /// Supports PDF (via lopdf), DOCX (via docx-rs), and plain text.
 async fn download_and_extract_document_text(
+    client: &reqwest::Client,
     bot_token: &str,
     doc: &IncomingDocument,
     _chat_id: i64,
 ) -> Option<String> {
     // Step 1: Get file path from Telegram.
-    let client = reqwest::Client::new();
     let file_info: serde_json::Value = client
         .get(format!("https://api.telegram.org/bot{}/getFile", bot_token))
         .query(&[("file_id", &doc.file_id)])
@@ -1350,7 +1392,8 @@ async fn run_webhook(
     };
 
     // Register webhook with Telegram.
-    api_set_webhook(&bot_token, &webhook_url, Some(&webhook_secret)).await?;
+    let http = reqwest::Client::new();
+    api_set_webhook(&http, &bot_token, &webhook_url, Some(&webhook_secret)).await?;
 
     let session_manager = Arc::new(SessionManager::new(sqlite.clone()));
     let state = Arc::new(WebhookState {
@@ -1365,6 +1408,7 @@ async fn run_webhook(
         gdrive_token,
         memory_store,
         session_manager,
+        http,
     });
 
     let app = Router::new()
@@ -1604,12 +1648,13 @@ async fn main() -> Result<()> {
                     anyhow!("No bot token found. Run: trusty-telegram pair --token <TOKEN>")
                 })?;
 
+            let http = reqwest::Client::new();
             match action {
                 WebhookAction::Set { url } => {
-                    api_set_webhook(&token, &url, None).await?;
+                    api_set_webhook(&http, &token, &url, None).await?;
                 }
                 WebhookAction::Clear => {
-                    api_delete_webhook(&token).await?;
+                    api_delete_webhook(&http, &token).await?;
                 }
             }
         }
