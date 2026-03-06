@@ -7538,6 +7538,7 @@ dependencies = [
  "tracing",
  "trusty-core",
  "trusty-email",
+ "trusty-embeddings",
  "trusty-extractor",
  "trusty-memory",
  "trusty-models",
