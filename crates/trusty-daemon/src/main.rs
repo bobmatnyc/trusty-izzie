@@ -128,7 +128,7 @@ fn midnight_ts() -> i64 {
 /// Run the daemon event loop: IPC server + event dispatcher.
 async fn run_daemon(config: AppConfig) -> Result<()> {
     let data_dir = expand_data_dir(&config);
-    let store = Arc::new(Store::open(&data_dir, INSTANCE_ID).await?);
+    let store = Arc::new(Store::open_lazy_kuzu(&data_dir, INSTANCE_ID).await?);
 
     // Seed recurring events (idempotent — no-op if already pending).
     let now = chrono::Utc::now().timestamp();

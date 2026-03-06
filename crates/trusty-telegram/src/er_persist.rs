@@ -62,12 +62,13 @@ pub async fn persist_extraction_result(
             }
 
             // Write to Kuzu (sync call — must use spawn_blocking).
-            let graph = Arc::clone(&store.graph);
-            let entity_clone = entity.clone();
-            if let Err(e) =
-                tokio::task::spawn_blocking(move || graph.upsert_entity(&entity_clone)).await
-            {
-                warn!(entity = %entity.normalized, error = %e, "failed to upsert entity to Kuzu");
+            if let Some(graph) = store.graph.get().await {
+                let entity_clone = entity.clone();
+                if let Err(e) =
+                    tokio::task::spawn_blocking(move || graph.upsert_entity(&entity_clone)).await
+                {
+                    warn!(entity = %entity.normalized, error = %e, "failed to upsert entity to Kuzu");
+                }
             }
 
             // Mark as graduated so we don't double-write on next pass.
@@ -80,14 +81,15 @@ pub async fn persist_extraction_result(
     }
 
     for rel in &result.relationships {
-        let graph = Arc::clone(&store.graph);
-        let rel_clone = rel.clone();
-        if let Err(e) =
-            tokio::task::spawn_blocking(move || graph.upsert_relationship(&rel_clone)).await
-        {
-            warn!(error = %e, "failed to upsert relationship to Kuzu");
-        } else {
-            relationships_written += 1;
+        if let Some(graph) = store.graph.get().await {
+            let rel_clone = rel.clone();
+            if let Err(e) =
+                tokio::task::spawn_blocking(move || graph.upsert_relationship(&rel_clone)).await
+            {
+                warn!(error = %e, "failed to upsert relationship to Kuzu");
+            } else {
+                relationships_written += 1;
+            }
         }
     }
 

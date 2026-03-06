@@ -445,13 +445,16 @@ return output
             warn!(name = %entity.value, error = %e, "Failed to upsert contact into LanceDB");
         }
 
-        // Kuzu graph (synchronous — must run in spawn_blocking)
-        let graph = store.graph.clone();
-        let entity_clone = entity.clone();
-        if let Err(e) =
-            tokio::task::spawn_blocking(move || graph.upsert_entity(&entity_clone)).await
-        {
-            warn!(name = %entity.value, error = %e, "Failed to upsert contact into Kuzu");
+        // Kuzu graph (synchronous — must run in spawn_blocking; lazy: may be None if locked)
+        if let Some(graph) = store.graph.get().await {
+            let entity_clone = entity.clone();
+            if let Err(e) =
+                tokio::task::spawn_blocking(move || graph.upsert_entity(&entity_clone)).await
+            {
+                warn!(name = %entity.value, error = %e, "Failed to upsert contact into Kuzu");
+            }
+        } else {
+            warn!(name = %entity.value, "KuzuDB not available, skipping graph write for contact");
         }
     }
 
