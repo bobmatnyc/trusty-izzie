@@ -1,0 +1,62 @@
+name: Installer Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS installer
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            installer/src-tauri/target
+          key: macos-installer-cargo-${{ hashFiles('installer/src-tauri/Cargo.lock') }}
+          restore-keys: macos-installer-cargo-
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: installer/node_modules
+          key: macos-installer-npm-${{ hashFiles('installer/package-lock.json') }}
+
+      - name: Install frontend dependencies
+        working-directory: installer
+        run: npm ci
+
+      - name: Build installer (universal macOS)
+        working-directory: installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npx tauri build --target universal-apple-darwin
+
+      - name: Upload .dmg to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          generate_release_notes: false
