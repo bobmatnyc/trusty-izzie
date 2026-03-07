@@ -169,12 +169,13 @@ async fn api_delete_webhook(client: &reqwest::Client, token: &str) -> Result<()>
 /// Returns e.g. "Berlin, Germany" or falls back to raw coordinates.
 async fn reverse_geocode(client: &reqwest::Client, lat: f64, lon: f64) -> String {
     let url = format!(
-        "https://nominatim.openstreetmap.org/reverse?format=json&lat={}&lon={}&zoom=10",
+        "https://nominatim.openstreetmap.org/reverse?format=json&lat={:.2}&lon={:.2}&zoom=10",
         lat, lon
     );
     let resp = client
         .get(&url)
-        .header("User-Agent", "trusty-izzie/1.0")
+        .header("User-Agent", "trusty-izzie/0.1 (personal assistant)")
+        .timeout(std::time::Duration::from_secs(5))
         .send()
         .await;
     if let Ok(r) = resp {
@@ -364,9 +365,13 @@ async fn send_reply_smart(
     let mut last_id = 0i64;
     for (i, chunk) in chunks.iter().enumerate() {
         let rid = if i == 0 { reply_to_message_id } else { None };
-        last_id = send_message(client, token, chat_id, chunk, rid, "HTML")
-            .await
-            .unwrap_or(0);
+        last_id = match send_message(client, token, chat_id, chunk, rid, "HTML").await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(error = %e, "send_reply_smart: failed to send chunk, continuing");
+                0
+            }
+        };
     }
     Ok(last_id)
 }
@@ -457,6 +462,8 @@ struct WebhookState {
     memory_store: Arc<MemoryStore>,
     session_manager: Arc<SessionManager>,
     http: reqwest::Client,
+    google_client_id: String,
+    google_client_secret: String,
 }
 
 async fn health_handler() -> StatusCode {
@@ -583,8 +590,8 @@ async fn oauth_callback_handler(
         }
     };
 
-    let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+    let client_id = state.google_client_id.clone();
+    let client_secret = state.google_client_secret.clone();
 
     let resp = state
         .http
@@ -942,8 +949,8 @@ async fn webhook_handler(
     // Handle /auth command — generate PKCE link and send to user.
     if text.trim() == "/auth" || text.trim().starts_with("/auth ") {
         let (verifier, challenge) = generate_pkce_pair();
-        let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
-        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+        let client_id = state.google_client_id.clone();
+        let client_secret = state.google_client_secret.clone();
         let ngrok =
             std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
         let redirect_uri = format!("https://{ngrok}/api/auth/google/callback");
@@ -1395,6 +1402,9 @@ async fn run_webhook(
     let http = reqwest::Client::new();
     api_set_webhook(&http, &bot_token, &webhook_url, Some(&webhook_secret)).await?;
 
+    let google_client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+    let google_client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+
     let session_manager = Arc::new(SessionManager::new(sqlite.clone()));
     let state = Arc::new(WebhookState {
         engine,
@@ -1409,6 +1419,8 @@ async fn run_webhook(
         memory_store,
         session_manager,
         http,
+        google_client_id,
+        google_client_secret,
     });
 
     let app = Router::new()
