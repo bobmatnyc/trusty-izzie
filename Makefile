@@ -251,3 +251,35 @@ uninstall:
 .PHONY: launchd-status
 launchd-status:
 	@launchctl list | grep trusty-izzie | awk '{printf "  %-45s PID=%-8s Exit=%s\n", $$3, $$1, $$2}' || echo "  no trusty-izzie services running"
+
+# ── Website ───────────────────────────────────────────────────────────────────
+
+.PHONY: website-dev
+website-dev:
+	@echo "Starting website dev server → http://localhost:3000"
+	cd website && npm run dev
+
+.PHONY: website-build
+website-build:
+	@echo "Building website static export → website/out/"
+	cd website && npm ci && npm run build
+
+.PHONY: website-install
+website-install:
+	cd website && npm ci
+
+# ── Installer ─────────────────────────────────────────────────────────────────
+
+.PHONY: installer-dev
+installer-dev:
+	@echo "Starting Tauri installer in dev mode"
+	cd installer && npm ci && npx tauri dev
+
+.PHONY: installer-build
+installer-build:
+	@echo "Building Tauri installer .app/.dmg → installer/src-tauri/target/release/bundle/"
+	cd installer && npm ci && npx tauri build
+
+.PHONY: installer-install
+installer-install:
+	cd installer && npm ci

@@ -980,7 +980,8 @@ impl ChatEngine {
              ?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=20",
             time_min, time_max
         );
-        let events_json: serde_json::Value = reqwest::Client::new()
+        let events_json: serde_json::Value = self
+            .http
             .get(&url)
             .bearer_auth(&access_token)
             .send()
@@ -1042,7 +1043,8 @@ impl ChatEngine {
             Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
         };
 
-        let lists: serde_json::Value = reqwest::Client::new()
+        let lists: serde_json::Value = self
+            .http
             .get("https://tasks.googleapis.com/tasks/v1/users/@me/lists")
             .bearer_auth(&access_token)
             .send()
@@ -1099,7 +1101,8 @@ impl ChatEngine {
             url.push_str("&showCompleted=false&showHidden=false");
         }
 
-        let resp: serde_json::Value = reqwest::Client::new()
+        let resp: serde_json::Value = self
+            .http
             .get(&url)
             .bearer_auth(&access_token)
             .send()
