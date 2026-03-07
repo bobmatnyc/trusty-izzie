@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "kuzu-memory": {
+      "type": "stdio",
+      "command": "kuzu-memory",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "KUZU_MEMORY_PROJECT_ROOT": "/path/to/trusty-izzie",
+        "KUZU_MEMORY_DB": "/path/to/trusty-izzie/.kuzu-memory"
+      }
+    },
+    "mcp-vector-search": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/trusty-izzie",
+        "mcp-vector-search",
+        "mcp"
+      ],
+      "env": {
+        "PROJECT_ROOT": "/path/to/trusty-izzie",
+        "MCP_PROJECT_ROOT": "/path/to/trusty-izzie"
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-# Testing Persona — masa (bobmatnyc@gmail.com)
+# Testing Persona
 
 This document describes the real user persona for trusty-izzie and provides
 a structured test script for verifying the system's knowledge, recall, and
@@ -10,9 +10,9 @@ conversational quality against the migrated email data.
 
 | Field | Value |
 |-------|-------|
-| Name | masa (Robert Matney) |
-| Email | bobmatnyc@gmail.com |
-| Instance ID | `42a923e9bd673e38` |
+| Name | your-name |
+| Email | your@gmail.com |
+| Instance ID | `<SHA256(your_email)[:16]>` |
 | Data migrated | 2026-03-01 from Weaviate (izzie2) |
 | Entities | 6,774 |
 | Memories | 29 |
@@ -57,7 +57,7 @@ trusty memory list
 ### 2. Entity recall (persons)
 
 ```bash
-# Search for specific people masa works with
+# Search for specific people you work with
 trusty entity search "alice"
 trusty entity search "bob"
 trusty entity search "anthropic"
@@ -164,10 +164,10 @@ for line in sys.stdin:
 # One-time setup
 trusty auth
 # → opens https://accounts.google.com/o/oauth2/v2/auth in browser
-# → you log in as bobmatnyc@gmail.com
+# → you log in as your@gmail.com
 # → Google redirects to http://localhost:8080/callback
 # → tokens stored in ~/.local/share/trusty-izzie/trusty.db
-# → "✓ Authenticated as bobmatnyc@gmail.com"
+# → "✓ Authenticated as your@gmail.com"
 
 # Then pull email
 trusty sync

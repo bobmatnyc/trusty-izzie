@@ -717,8 +717,7 @@ async fn oauth_callback_handler(
     }
 
     // Register account (primary or secondary).
-    let primary_email =
-        std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+    let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_default();
     let account_type = if auth_email == primary_email {
         "primary"
     } else {
@@ -1679,8 +1678,7 @@ async fn main() -> Result<()> {
             let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
 
             // Build user context from environment / config.
-            let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL")
-                .unwrap_or_else(|_| "bob@matsuoka.com".to_string());
+            let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_default();
             let user_context = UserContext {
                 user_id: INSTANCE_ID.to_string(),
                 email: primary_email.clone(),

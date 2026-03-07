@@ -16,7 +16,9 @@ use trusty_store::SqliteStore;
 use crate::context::ContextAssembler;
 use crate::tools::ToolName;
 
-const PRIMARY_EMAIL: &str = "bob@matsuoka.com";
+// Fallback when TRUSTY_PRIMARY_EMAIL env var is not set.
+// Set TRUSTY_PRIMARY_EMAIL in your .env to your Google account email.
+const PRIMARY_EMAIL: &str = "";
 
 /// Drives the conversation loop: context assembly → LLM call → tool dispatch → save.
 pub struct ChatEngine {
@@ -1724,7 +1726,7 @@ I can check my own service status with `check_service_status`, report my version
 - `run_agent` — enqueue a background research agent task
 - `list_agents` — list available agent definitions
 - `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30)
-- `get_task_lists` — list the user's Google Task lists (uses bob@matsuoka.com)
+- `get_task_lists` — list the user's Google Task lists (uses TRUSTY_PRIMARY_EMAIL)
 - `get_tasks` — fetch tasks from a list (optional: list_id, max_results, show_completed; default: incomplete tasks from primary list)
 - `get_agent_task` — get the status and output of an agent task by ID
 - `list_accounts` — list connected Google accounts and their sync status

@@ -60,3 +60,6 @@ docs/research/
 
 # Kuzu memory backups
 .kuzu-memory-backups/
+
+# MCP configuration (machine-specific paths — copy .mcp.json.example instead)
+.mcp.json
