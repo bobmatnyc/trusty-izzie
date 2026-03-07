@@ -19,6 +19,7 @@ mod channel;
 mod er_persist;
 mod gdrive;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -1481,7 +1482,11 @@ async fn run_webhook(
     println!("trusty-telegram webhook server on port {port}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
