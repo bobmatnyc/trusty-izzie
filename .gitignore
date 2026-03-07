@@ -54,3 +54,9 @@ migration/migration.log
 
 # Claude Code local settings
 .claude/
+
+# Research notes — may contain local credentials / PII
+docs/research/
+
+# Kuzu memory backups
+.kuzu-memory-backups/

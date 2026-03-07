@@ -39,14 +39,8 @@ except ImportError as e:
     sys.exit(1)
 
 # ── config ────────────────────────────────────────────────────────────────────
-WEAVIATE_URL = os.environ.get(
-    "WEAVIATE_URL",
-    "https://2br9ofb5rtat5glmklmxyw.c0.us-east1.gcp.weaviate.cloud"
-)
-WEAVIATE_API_KEY = os.environ.get(
-    "WEAVIATE_API_KEY",
-    "RDgvYUNkUWJJM1VWS1BmV18wOW5UMFYwZU9ZOHZxTGhKYk5aY2FuK1NONFpuMFZZaks2K2lsN1NtaTIwPV92MjAw"
-)
+WEAVIATE_URL = os.environ.get("WEAVIATE_URL", "")
+WEAVIATE_API_KEY = os.environ.get("WEAVIATE_API_KEY", "")
 DATA_DIR = Path(os.environ.get("TRUSTY_DATA_DIR", Path.home() / ".local/share/trusty-izzie")).expanduser()
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 CONFIDENCE_THRESHOLD = 0.85   # Only migrate high-confidence entities
