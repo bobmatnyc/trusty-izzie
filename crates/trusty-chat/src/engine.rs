@@ -1449,7 +1449,14 @@ impl ChatEngine {
         let context_section = self.context_assembler.render_context(&ctx);
         let now = chrono::Utc::now();
         let accounts_context = self.load_accounts_context();
-        let system_content = system_prompt(now, &context_section, &accounts_context);
+        // Load current user preferences for system prompt injection.
+        let current_prefs: Vec<(String, String)> = self
+            .sqlite
+            .as_deref()
+            .and_then(|s| s.list_all_prefs().ok())
+            .unwrap_or_default();
+        let system_content =
+            system_prompt(now, &context_section, &accounts_context, &current_prefs);
 
         // 3. Build the LLM message array from session history.
         let mut llm_messages: Vec<OrchatMessage> = vec![OrchatMessage {
@@ -1562,11 +1569,19 @@ impl ChatEngine {
             });
 
             // Persist the same two turns to session.messages so they survive a reload.
+            // Use a human-readable summary instead of raw JSON to prevent LLM context corruption.
             session.messages.push(ChatMessage {
                 id: Uuid::new_v4(),
                 session_id: session.id,
                 role: MessageRole::Assistant,
-                content: raw_content,
+                content: format!(
+                    "[Tool calls: {}]",
+                    tool_calls
+                        .iter()
+                        .map(|tc| tc.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 tool_name: None,
                 tool_result: None,
                 token_count: None,
@@ -1644,7 +1659,12 @@ fn is_dangerous_command(cmd: &str) -> bool {
     BLOCKED_SHELL_PATTERNS.iter().any(|pat| lower.contains(pat))
 }
 
-fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str, accounts_ctx: &str) -> String {
+fn system_prompt(
+    now: chrono::DateTime<chrono::Utc>,
+    context: &str,
+    accounts_ctx: &str,
+    current_prefs: &[(String, String)],
+) -> String {
     let user_email =
         std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
     let user_name = std::env::var("TRUSTY_USER_NAME").unwrap_or_else(|_| "Masa".to_string());
@@ -1658,6 +1678,15 @@ fn system_prompt(now: chrono::DateTime<chrono::Utc>, context: &str, accounts_ctx
     } else {
         format!("\n\n{}", accounts_ctx)
     };
+    let prefs_section = if current_prefs.is_empty() {
+        String::new()
+    } else {
+        let mut s = "\n\n## Current Settings\n".to_string();
+        for (key, value) in current_prefs {
+            s.push_str(&format!("- {key}: {value}\n"));
+        }
+        s
+    };
     format!(
         r#"You are trusty-izzie, a personal AI assistant with deep knowledge of the user's professional relationships and work context. You run locally on the user's machine.
 
@@ -1669,7 +1698,7 @@ Today is {}. Current time: {}.
 - **Timezone**: America/New_York (EDT, UTC-5)
 - You are their personal assistant. Address them by name when appropriate. When they ask who they are or about themselves, use this information.
 - **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, or local contacts.
-{context_section}{accounts_section}
+{context_section}{accounts_section}{prefs_section}
 
 ## My Deployment
 
@@ -1783,6 +1812,30 @@ When the user asks about calendar, email, or tasks, infer which account to use f
 - "On your personal calendar (email@gmail.com)..."
 - Never silently pick one without indicating which account you used
 
+## Preference Capture Rules
+
+When the user expresses a preference about your behavior, IMMEDIATELY call `set_preference` to persist it. Do not just acknowledge — always save it.
+
+Examples of preference statements:
+- "be more concise" → set_preference(key="response_style", value="concise")
+- "stop morning messages" → set_preference(key="morning_briefing_enabled", value="false")
+- "I want evening summaries" → set_preference(key="evening_briefing_enabled", value="true")
+- "less personal, more task-focused" → set_preference(key="tone", value="professional")
+- "remind me about X weekly" → set_preference(key="weekly_digest_enabled", value="true")
+
+Valid preference keys and defaults:
+| Key | Default | Description |
+|-----|---------|-------------|
+| morning_briefing_enabled | true | 8am daily briefing |
+| evening_briefing_enabled | true | 6pm daily briefing |
+| weekly_digest_enabled | true | Monday 9am digest |
+| response_style | balanced | "concise" or "balanced" or "detailed" |
+| tone | friendly | "friendly" or "professional" |
+| interrupt_notifications_enabled | true | iMessage/WhatsApp push alerts |
+| vip_email_alerts_enabled | true | VIP contact email alerts |
+
+After saving, confirm: "Got it — I've saved that preference."
+
 ## CRITICAL OUTPUT FORMAT
 
 Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
@@ -1859,7 +1912,17 @@ fn parse_response(raw: &str) -> StructuredResponse {
 
 /// Remove any trailing ```json ... ``` block that the model sometimes appends
 /// inside the reply field as a "structured output" summary.
+/// Also guards against the reply field itself being a raw StructuredResponse JSON blob.
 fn clean_reply(reply: &str) -> String {
+    let trimmed = reply.trim();
+    // Guard: if reply is itself a JSON StructuredResponse blob, extract the inner reply.
+    if trimmed.starts_with('{') {
+        if let Ok(inner) = serde_json::from_str::<StructuredResponse>(trimmed) {
+            if !inner.reply.is_empty() {
+                return clean_reply(&inner.reply);
+            }
+        }
+    }
     // Look for the LAST occurrence of ```json or ``` in the trimmed reply.
     // If found, strip from that point onward (and any trailing whitespace before it).
     let trimmed = reply.trim_end();
@@ -1908,7 +1971,7 @@ mod tests {
     #[test]
     fn test_system_prompt_contains_date() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "", "");
+        let prompt = system_prompt(now, "", "", &[]);
         let year = now.format("%Y").to_string();
         assert!(prompt.contains(&year));
     }
@@ -1920,6 +1983,7 @@ mod tests {
             now,
             "## Relevant People & Projects\n- Alice (Person): alice",
             "",
+            &[],
         );
         assert!(prompt.contains("## Relevant People & Projects"));
     }
@@ -1927,7 +1991,7 @@ mod tests {
     #[test]
     fn test_system_prompt_no_context_section_when_empty() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "", "");
+        let prompt = system_prompt(now, "", "", &[]);
         assert!(!prompt.contains("## Relevant"));
     }
 
