@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "default",
+  "description": "Installer capabilities",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-execute",
+    "shell:allow-open",
+    "fs:allow-write",
+    "fs:allow-read",
+    "http:default",
+    "opener:default"
+  ]
+}

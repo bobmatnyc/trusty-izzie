@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Installer capabilities","local":true,"windows":["main"],"permissions":["core:default","shell:allow-execute","shell:allow-open","fs:allow-write","fs:allow-read","http:default","opener:default"],"platforms":["macOS"]}}
