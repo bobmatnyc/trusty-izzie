@@ -39,3 +39,4 @@ uuid = { workspace = true }
 lopdf = "0.32"
 docx-rs = "0.4"
 rand = "0.8"
+tower_governor = "0.4"

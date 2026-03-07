@@ -446,6 +446,7 @@ struct IncomingUser {
 struct OAuthCallbackQuery {
     code: Option<String>,
     error: Option<String>,
+    state: Option<String>,
 }
 
 /// Shared state for the axum webhook handler.
@@ -589,6 +590,27 @@ async fn oauth_callback_handler(
             );
         }
     };
+
+    // Validate OAuth CSRF state parameter.
+    let stored_state = state
+        .sqlite
+        .get_config("oauth_pending_state")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if !stored_state.is_empty() {
+        let provided_state = params.state.as_deref().unwrap_or("");
+        if provided_state != stored_state {
+            warn!("oauth_callback: state mismatch — possible CSRF attack");
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::response::Html(
+                    "<html><body><h2>Invalid state parameter.</h2></body></html>".to_string(),
+                ),
+            );
+        }
+    }
+    let _ = state.sqlite.set_config("oauth_pending_state", "");
 
     let client_id = state.google_client_id.clone();
     let client_secret = state.google_client_secret.clone();
@@ -949,14 +971,27 @@ async fn webhook_handler(
     // Handle /auth command — generate PKCE link and send to user.
     if text.trim() == "/auth" || text.trim().starts_with("/auth ") {
         let (verifier, challenge) = generate_pkce_pair();
+        let state_value: String = {
+            use rand::Rng;
+            rand::thread_rng()
+                .sample_iter(&rand::distributions::Alphanumeric)
+                .take(32)
+                .map(char::from)
+                .collect()
+        };
         let client_id = state.google_client_id.clone();
         let client_secret = state.google_client_secret.clone();
         let ngrok =
             std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
         let redirect_uri = format!("https://{ngrok}/api/auth/google/callback");
         let auth_client = GoogleAuthClient::new(client_id, client_secret, redirect_uri);
-        let auth_url = auth_client.authorization_url_pkce(&challenge);
+        let auth_url = format!(
+            "{}&state={}",
+            auth_client.authorization_url_pkce(&challenge),
+            state_value
+        );
         let _ = state.sqlite.set_config("oauth_pkce_verifier", &verifier);
+        let _ = state.sqlite.set_config("oauth_pending_state", &state_value);
         let _ = state
             .sqlite
             .set_config("oauth_pending_chat_id", &chat_id.to_string());
@@ -1423,11 +1458,22 @@ async fn run_webhook(
         google_client_secret,
     });
 
+    let governor_conf = Arc::new(
+        tower_governor::governor::GovernorConfigBuilder::default()
+            .per_millisecond(200) // replenish 1 token per 200ms = 5 req/s
+            .burst_size(20)
+            .finish()
+            .expect("invalid governor config"),
+    );
+
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/v1/chat", post(chat_handler))
         .route("/webhook/telegram", post(webhook_handler))
         .route("/api/auth/google/callback", get(oauth_callback_handler))
+        .layer(tower_governor::GovernorLayer {
+            config: governor_conf,
+        })
         .with_state(state);
 
     let addr = format!("0.0.0.0:{port}");
@@ -1443,13 +1489,23 @@ async fn run_webhook(
 // Long-poll mode (fallback)
 // ---------------------------------------------------------------------------
 
-async fn run_poll(bot_token: String, engine: Arc<ChatEngine>, allowed_users: Vec<i64>) {
+async fn run_poll(
+    bot_token: String,
+    engine: Arc<ChatEngine>,
+    allowed_users: Vec<i64>,
+    session_manager: Arc<SessionManager>,
+    memory_store: Arc<MemoryStore>,
+    user_id: String,
+) {
     info!("Starting Telegram bot long-polling");
     let bot = Bot::new(bot_token);
 
     teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let engine = engine.clone();
         let allowed = allowed_users.clone();
+        let session_manager = Arc::clone(&session_manager);
+        let memory_store = Arc::clone(&memory_store);
+        let user_id = user_id.clone();
         async move {
             // Authorisation check
             if !allowed.is_empty() {
@@ -1469,8 +1525,12 @@ async fn run_poll(bot_token: String, engine: Arc<ChatEngine>, allowed_users: Vec
             bot.send_chat_action(msg.chat.id, ChatAction::Typing)
                 .await?;
 
-            let session_key = format!("tg_{}", msg.chat.id);
-            let mut session = SessionManager::new_session(&session_key);
+            // Load persisted session by stable chat_id UUID (matches webhook behaviour).
+            let session_uuid = uuid::Uuid::from_u128(msg.chat.id.0 as u128);
+            let mut session = session_manager
+                .load_or_create(session_uuid, 40)
+                .await
+                .unwrap_or_else(|_| SessionManager::new_session(&format!("tg_{}", msg.chat.id)));
 
             match engine.chat(&mut session, &text).await {
                 Ok(response) => {
@@ -1478,7 +1538,46 @@ async fn run_poll(bot_token: String, engine: Arc<ChatEngine>, allowed_users: Vec
                         memories = response.memories_to_save.len(),
                         "Chat turn complete"
                     );
-                    bot.send_message(msg.chat.id, &response.reply).await?;
+
+                    let reply = if response.reply.trim().is_empty() {
+                        "👍".to_string()
+                    } else {
+                        response.reply.clone()
+                    };
+                    bot.send_message(msg.chat.id, &reply).await?;
+
+                    // Persist session (best-effort).
+                    let sm_save = Arc::clone(&session_manager);
+                    let session_to_save = session.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = sm_save.save(&session_to_save).await {
+                            warn!("poll: failed to save session: {e}");
+                        }
+                    });
+
+                    // Persist memories (best-effort).
+                    if !response.memories_to_save.is_empty() {
+                        let mem_store = Arc::clone(&memory_store);
+                        let memories = response.memories_to_save.clone();
+                        let uid = user_id.clone();
+                        tokio::spawn(async move {
+                            for mem in memories {
+                                if let Err(e) = mem_store
+                                    .save(
+                                        &uid,
+                                        &mem.content,
+                                        mem.category,
+                                        mem.related_entities,
+                                        mem.importance,
+                                        None,
+                                    )
+                                    .await
+                                {
+                                    warn!("poll: failed to save memory: {e}");
+                                }
+                            }
+                        });
+                    }
                 }
                 Err(e) => {
                     error!("Chat error: {e}");
@@ -1623,7 +1722,16 @@ async fn main() -> Result<()> {
             }
 
             if poll {
-                run_poll(token, engine, allowed).await;
+                let poll_session_manager = Arc::new(SessionManager::new(Arc::clone(&store.sqlite)));
+                run_poll(
+                    token,
+                    engine,
+                    allowed,
+                    poll_session_manager,
+                    Arc::clone(&memory_store),
+                    INSTANCE_ID.to_string(),
+                )
+                .await;
             } else {
                 // Webhook mode — URL required.
                 let url = webhook_url.ok_or_else(|| {
