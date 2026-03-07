@@ -1,4 +1,4 @@
-//! macOS Contacts sync handler — reads AddressBook via osascript and upserts
+//! macOS Contacts sync handler — reads AddressBook SQLite directly and upserts
 //! entities into LanceDB and the Kuzu knowledge graph.
 //!
 //! Matching is three-tiered to balance speed, accuracy, and cost:
@@ -7,6 +7,7 @@
 //!   3. Haiku batch call for 0.70–0.92 similarity candidates.
 
 use async_trait::async_trait;
+use rusqlite::{Connection, OpenFlags};
 use std::sync::Arc;
 use tracing::{info, warn};
 use trusty_core::error::TrustyError;
@@ -58,16 +59,18 @@ impl EventHandler for ContactsSyncHandler {
 
         info!(force, "Starting macOS Contacts sync");
 
-        let raw = tokio::task::spawn_blocking(ContactsSyncHandler::fetch_contacts_via_osascript)
+        let contacts = tokio::task::spawn_blocking(ContactsSyncHandler::fetch_contacts_via_sqlite)
             .await
             .map_err(|e| TrustyError::Storage(e.to_string()))?
             .map_err(|e| TrustyError::Storage(e.to_string()))?;
 
-        let contacts = Self::parse_contacts(&raw);
-        info!(count = contacts.len(), "Parsed contacts from AddressBook");
+        info!(
+            count = contacts.len(),
+            "Fetched contacts from AddressBook SQLite"
+        );
 
         if contacts.is_empty() {
-            warn!("No contacts returned from osascript — permissions may not be granted");
+            warn!("No contacts returned from AddressBook SQLite — check Full Disk Access");
             return Ok(DispatchResult::Done);
         }
 
@@ -302,94 +305,118 @@ struct ContactRecord {
 // ---------------------------------------------------------------------------
 
 impl ContactsSyncHandler {
-    /// Run osascript to export all contacts as tab-separated lines.
-    /// Each line: FirstName\tLastName\tEmail\tPhone\tCompany
-    fn fetch_contacts_via_osascript() -> anyhow::Result<String> {
-        let script = r#"
-set output to ""
-tell application "Contacts"
-    repeat with p in every person
-        set fn to ""
-        set ln to ""
-        set em to ""
-        set ph to ""
-        set co to ""
-        try
-            set fn to first name of p
-        end try
-        try
-            set ln to last name of p
-        end try
-        try
-            if (count of emails of p) > 0 then
-                set em to value of first item of emails of p
-            end if
-        end try
-        try
-            if (count of phones of p) > 0 then
-                set ph to value of first item of phones of p
-            end if
-        end try
-        try
-            set co to organization of p
-        end try
-        set output to output & fn & "\t" & ln & "\t" & em & "\t" & ph & "\t" & co & "\n"
-    end repeat
-end tell
-return output
-"#;
-        let out = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()?;
-        if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            anyhow::bail!("osascript failed: {err}");
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    }
+    /// Read all contacts directly from the AddressBook SQLite database.
+    /// Tries the flat path first, then globs Sources/*/AddressBook-v22.abcddb.
+    fn fetch_contacts_via_sqlite() -> anyhow::Result<Vec<ContactRecord>> {
+        let home = std::env::var("HOME").unwrap_or_default();
 
-    /// Parse tab-separated contact lines into structured records.
-    fn parse_contacts(raw: &str) -> Vec<ContactRecord> {
-        raw.lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.splitn(5, '\t').collect();
-                if parts.len() < 2 {
-                    return None;
+        // Candidate paths: flat location first, then per-source shards.
+        let flat = format!(
+            "{}/Library/Application Support/AddressBook/AddressBook-v22.abcddb",
+            home
+        );
+        let sources_dir = format!("{}/Library/Application Support/AddressBook/Sources", home);
+
+        let mut db_paths: Vec<std::path::PathBuf> = Vec::new();
+        if std::path::Path::new(&flat).exists() {
+            db_paths.push(flat.into());
+        }
+        if let Ok(rd) = std::fs::read_dir(&sources_dir) {
+            for entry in rd.flatten() {
+                let candidate = entry.path().join("AddressBook-v22.abcddb");
+                if candidate.exists() {
+                    db_paths.push(candidate);
                 }
-                let first = parts[0].trim();
-                let last = parts.get(1).map(|s| s.trim()).unwrap_or("");
-                let full_name = format!("{} {}", first, last).trim().to_string();
-                if full_name.is_empty() {
-                    return None;
+            }
+        }
+
+        if db_paths.is_empty() {
+            anyhow::bail!(
+                "No AddressBook-v22.abcddb found under ~/Library/Application Support/AddressBook — \
+                 grant Full Disk Access to trusty-daemon in System Settings > Privacy & Security"
+            );
+        }
+
+        let sql = "SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, \
+                   GROUP_CONCAT(DISTINCT p.ZFULLNUMBER) as phones, \
+                   GROUP_CONCAT(DISTINCT e.ZADDRESS) as emails \
+                   FROM ZABCDRECORD r \
+                   LEFT JOIN ZABCDPHONENUMBER p ON p.ZOWNER = r.Z_PK \
+                   LEFT JOIN ZABCDEMAILADDRESS e ON e.ZOWNER = r.Z_PK \
+                   WHERE r.ZFIRSTNAME IS NOT NULL OR r.ZLASTNAME IS NOT NULL \
+                   GROUP BY r.Z_PK";
+
+        let mut records: Vec<ContactRecord> = Vec::new();
+
+        for db_path in &db_paths {
+            let conn = match Connection::open_with_flags(
+                db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(path = %db_path.display(), error = %e, "Could not open AddressBook DB");
+                    continue;
                 }
-                Some(ContactRecord {
+            };
+
+            let mut stmt = match conn.prepare(sql) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(path = %db_path.display(), error = %e, "Could not prepare AddressBook query");
+                    continue;
+                }
+            };
+
+            let mut rows = match stmt.query([]) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(path = %db_path.display(), error = %e, "Could not query AddressBook");
+                    continue;
+                }
+            };
+
+            while let Ok(Some(row)) = rows.next() {
+                let first: Option<String> = row.get(0).ok().flatten();
+                let last: Option<String> = row.get(1).ok().flatten();
+                let company: Option<String> = row.get(2).ok().flatten();
+                let phones_str: Option<String> = row.get(3).ok().flatten();
+                let emails_str: Option<String> = row.get(4).ok().flatten();
+
+                let full_name = match (&first, &last) {
+                    (Some(f), Some(l)) => format!("{} {}", f, l),
+                    (Some(f), None) => f.clone(),
+                    (None, Some(l)) => l.clone(),
+                    (None, None) => continue,
+                };
+                if full_name.trim().is_empty() {
+                    continue;
+                }
+
+                let phone = phones_str
+                    .as_deref()
+                    .and_then(|s| s.split(',').next())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+
+                let email = emails_str
+                    .as_deref()
+                    .and_then(|s| s.split(',').next())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+
+                records.push(ContactRecord {
                     full_name,
-                    first_name: if first.is_empty() {
-                        None
-                    } else {
-                        Some(first.to_string())
-                    },
-                    last_name: if last.is_empty() {
-                        None
-                    } else {
-                        Some(last.to_string())
-                    },
-                    email: parts
-                        .get(2)
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty()),
-                    phone: parts
-                        .get(3)
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty()),
-                    company: parts
-                        .get(4)
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty()),
-                })
-            })
-            .collect()
+                    first_name: first,
+                    last_name: last,
+                    email,
+                    phone,
+                    company,
+                });
+            }
+        }
+
+        Ok(records)
     }
 
     /// Build an Entity from a ContactRecord, applying Gap 3 field layout.
