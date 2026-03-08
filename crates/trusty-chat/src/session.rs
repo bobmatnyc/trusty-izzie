@@ -187,6 +187,11 @@ impl SessionManager {
                 MessageRole::System => continue,
             };
 
+            // Never persist empty assistant messages — Anthropic rejects them with 500.
+            if role_str == "assistant" && msg.content.trim().is_empty() {
+                continue;
+            }
+
             let tokens = msg.token_count.map(|t| t as i32);
             // Silently ignore duplicate-key errors — message already persisted.
             if let Err(e) = self.sqlite.add_message(
