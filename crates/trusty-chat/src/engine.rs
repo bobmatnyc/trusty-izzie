@@ -1502,6 +1502,20 @@ impl ChatEngine {
             });
         }
 
+        // Merge consecutive same-role messages to satisfy Anthropic's strict alternation requirement.
+        // Consecutive user or assistant messages get concatenated with "\n\n".
+        let mut merged: Vec<OrchatMessage> = Vec::with_capacity(llm_messages.len());
+        for msg in llm_messages {
+            if let Some(last) = merged.last_mut() {
+                if last.role == msg.role {
+                    last.content = format!("{}\n\n{}", last.content, msg.content);
+                    continue;
+                }
+            }
+            merged.push(msg);
+        }
+        let mut llm_messages = merged;
+
         // 4. Tool call loop.
         let max_iters = (self.max_tool_iterations as usize).max(1);
         let mut structured = StructuredResponse {
