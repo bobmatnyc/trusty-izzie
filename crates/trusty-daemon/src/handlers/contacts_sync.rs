@@ -32,7 +32,7 @@ const DIST_MID: f32 = 0.775; // cosine 0.70–0.92 — Haiku review
 
 // OpenRouter constants (same as trusty-extractor)
 const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
-const HAIKU_MODEL: &str = "anthropic/claude-haiku-4-5";
+const HAIKU_MODEL: &str = "anthropic/claude-haiku-4-6";
 const HAIKU_BATCH_SIZE: usize = 50;
 
 // ---------------------------------------------------------------------------

@@ -564,7 +564,7 @@ impl ChatEngine {
     /// Parse YAML front-matter from agent MD content.
     /// Returns (model, max_runtime_mins, description, body).
     fn parse_agent_front_matter(&self, content: &str) -> (String, u32, String, String) {
-        let default_model = "anthropic/claude-sonnet-4-5".to_string();
+        let default_model = "anthropic/claude-sonnet-4-6".to_string();
         if !content.starts_with("---") {
             return (default_model, 30, String::new(), content.to_string());
         }

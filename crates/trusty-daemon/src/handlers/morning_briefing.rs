@@ -79,7 +79,7 @@ async fn generate_briefing(base: &str, key: &str, period: &str) -> Result<String
         .post(&url)
         .header("Authorization", format!("Bearer {}", key))
         .json(&serde_json::json!({
-            "model": "anthropic/claude-haiku-4-5",
+            "model": "anthropic/claude-haiku-4-6",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 200
         }))

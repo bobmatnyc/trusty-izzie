@@ -91,7 +91,7 @@ async fn generate_watch_update(base: &str, key: &str, topic: &str) -> Result<Str
         .post(&url)
         .header("Authorization", format!("Bearer {}", key))
         .json(&serde_json::json!({
-            "model": "anthropic/claude-haiku-4-5",
+            "model": "anthropic/claude-haiku-4-6",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 150
         }))

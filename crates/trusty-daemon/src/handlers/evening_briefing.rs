@@ -73,7 +73,7 @@ async fn generate_evening_briefing(base: &str, key: &str) -> Result<String, Trus
         .post(&url)
         .header("Authorization", format!("Bearer {}", key))
         .json(&serde_json::json!({
-            "model": "anthropic/claude-haiku-4-5",
+            "model": "anthropic/claude-haiku-4-6",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 200
         }))
