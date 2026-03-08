@@ -615,6 +615,9 @@ async fn oauth_callback_handler(
 
     let client_id = state.google_client_id.clone();
     let client_secret = state.google_client_secret.clone();
+    let ngrok_domain =
+        std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
+    let redirect_uri = format!("https://{}/api/auth/google/callback", ngrok_domain);
 
     let resp = state
         .http
@@ -623,10 +626,7 @@ async fn oauth_callback_handler(
             ("code", code.as_str()),
             ("client_id", client_id.as_str()),
             ("client_secret", client_secret.as_str()),
-            (
-                "redirect_uri",
-                "https://izzie.ngrok.dev/api/auth/google/callback",
-            ),
+            ("redirect_uri", redirect_uri.as_str()),
             ("grant_type", "authorization_code"),
             ("code_verifier", verifier.as_str()),
         ])
@@ -998,15 +998,18 @@ async fn webhook_handler(
         let token = state.bot_token.clone();
         let http_auth = state.http.clone();
         tokio::spawn(async move {
-            let _ = send_reply(
-                &http_auth,
-                &token,
-                chat_id,
-                &format!(
-                    "🔐 Authenticate trusty-izzie with Gmail:\n\n{auth_url}\n\nLink expires in ~10 minutes."
-                ),
-            )
-            .await;
+            let endpoint = format!("https://api.telegram.org/bot{token}/sendMessage");
+            let body = serde_json::json!({
+                "chat_id": chat_id,
+                "text": "Tap the button below to authorize your Google account:",
+                "reply_markup": {
+                    "inline_keyboard": [[{
+                        "text": "Authorize Google Account",
+                        "url": auth_url
+                    }]]
+                }
+            });
+            let _ = http_auth.post(&endpoint).json(&body).send().await;
         });
         return StatusCode::OK;
     }

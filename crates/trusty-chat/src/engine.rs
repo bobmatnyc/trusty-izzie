@@ -1178,7 +1178,7 @@ impl ChatEngine {
             std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
         let redirect_uri = format!("https://{}/api/auth/google/callback", ngrok_domain);
 
-        let scopes = "https://mail.google.com/ https://www.googleapis.com/auth/userinfo.email";
+        let scopes = "https://mail.google.com/ https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
         let mut url = reqwest::Url::parse("https://accounts.google.com/o/oauth2/v2/auth")
             .context("failed to parse Google auth URL")?;
         url.query_pairs_mut()
