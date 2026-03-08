@@ -1207,14 +1207,31 @@ async fn webhook_handler(
             Err(e) => {
                 // Stop heartbeat.
                 let _ = cancel_tx.send(());
-                error!("Chat error: {e}");
-                let err_text = "Sorry, I encountered an error processing your message.";
+                let e_str = e.to_string();
+                error!("Chat error: {e_str}");
+                let err_text = if e_str.contains("402") || e_str.contains("Insufficient credits") {
+                    "⚠️ OpenRouter out of credits. Add more at openrouter.ai/settings/credits"
+                        .to_string()
+                } else if e_str.contains("429")
+                    || e_str.contains("rate limit")
+                    || e_str.contains("Rate limit")
+                {
+                    "⚠️ OpenRouter rate limit hit. Try again in a moment.".to_string()
+                } else if e_str.contains("500")
+                    || e_str.contains("502")
+                    || e_str.contains("503")
+                    || e_str.contains("Internal Server Error")
+                {
+                    "⚠️ OpenRouter service error (500). Try again in a moment.".to_string()
+                } else {
+                    format!("⚠️ Error: {}", &e_str[..e_str.len().min(120)])
+                };
                 if progress_id > 0 {
                     let _ =
-                        edit_message_text(&http_chat, &token, chat_id, progress_id, err_text, "")
+                        edit_message_text(&http_chat, &token, chat_id, progress_id, &err_text, "")
                             .await;
                 } else {
-                    let _ = send_reply(&http_chat, &token, chat_id, err_text).await;
+                    let _ = send_reply(&http_chat, &token, chat_id, &err_text).await;
                 }
             }
         }
@@ -1587,9 +1604,28 @@ async fn run_poll(
                     }
                 }
                 Err(e) => {
-                    error!("Chat error: {e}");
-                    bot.send_message(msg.chat.id, "Sorry, I encountered an error.")
-                        .await?;
+                    let e_str = e.to_string();
+                    error!("Chat error: {e_str}");
+                    let user_msg = if e_str.contains("402")
+                        || e_str.contains("Insufficient credits")
+                    {
+                        "⚠️ OpenRouter out of credits. Add more at openrouter.ai/settings/credits"
+                            .to_string()
+                    } else if e_str.contains("429")
+                        || e_str.contains("rate limit")
+                        || e_str.contains("Rate limit")
+                    {
+                        "⚠️ OpenRouter rate limit hit. Try again in a moment.".to_string()
+                    } else if e_str.contains("500")
+                        || e_str.contains("502")
+                        || e_str.contains("503")
+                        || e_str.contains("Internal Server Error")
+                    {
+                        "⚠️ OpenRouter service error (500). Try again in a moment.".to_string()
+                    } else {
+                        format!("⚠️ Error: {}", &e_str[..e_str.len().min(120)])
+                    };
+                    bot.send_message(msg.chat.id, user_msg).await?;
                 }
             }
 

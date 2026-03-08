@@ -1525,14 +1525,23 @@ impl ChatEngine {
                 },
             };
 
-            let http_response = self
-                .http
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .json(&request_body)
-                .send()
-                .await
-                .context("failed to send request to OpenRouter")?;
+            let mut attempts = 0u8;
+            let http_response = loop {
+                let resp = self
+                    .http
+                    .post(&url)
+                    .bearer_auth(&self.api_key)
+                    .json(&request_body)
+                    .send()
+                    .await
+                    .context("failed to send request to OpenRouter")?;
+                if resp.status().is_server_error() && attempts < 1 {
+                    attempts += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    continue;
+                }
+                break resp;
+            };
 
             let status = http_response.status();
             if !status.is_success() {
