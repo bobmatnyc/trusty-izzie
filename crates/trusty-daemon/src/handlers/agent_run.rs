@@ -27,7 +27,7 @@ impl AgentRunHandler {
     /// Format: optional `---\nkey: value\n---\n` at start of file.
     /// Returns (model, max_runtime_mins, description, instructions_body).
     fn parse_agent_file(&self, content: &str) -> (String, u32, String, String) {
-        let default_model = "anthropic/claude-sonnet-4-6".to_string();
+        let default_model = "anthropic/claude-sonnet-4.6".to_string();
 
         if !content.starts_with("---") {
             return (default_model, 30, String::new(), content.to_string());

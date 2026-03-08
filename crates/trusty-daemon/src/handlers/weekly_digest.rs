@@ -73,7 +73,7 @@ async fn generate_weekly_digest(base: &str, key: &str) -> Result<String, TrustyE
         .post(&url)
         .header("Authorization", format!("Bearer {}", key))
         .json(&serde_json::json!({
-            "model": "anthropic/claude-haiku-4-6",
+            "model": "anthropic/claude-haiku-4.5",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 200
         }))

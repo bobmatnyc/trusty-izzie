@@ -192,7 +192,7 @@ pub async fn create_task(
 /// Parse YAML front-matter from agent MD content.
 /// Returns (model, max_runtime_mins, description).
 fn parse_front_matter(content: &str) -> (String, u32, String) {
-    let default_model = "anthropic/claude-sonnet-4-6".to_string();
+    let default_model = "anthropic/claude-sonnet-4.6".to_string();
     if !content.starts_with("---") {
         return (default_model, 30, String::new());
     }

@@ -193,7 +193,7 @@ async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
         .post("https://openrouter.ai/api/v1/chat/completions")
         .bearer_auth(&api_key)
         .json(&serde_json::json!({
-            "model": "anthropic/claude-haiku-4-6",
+            "model": "anthropic/claude-haiku-4.5",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": messages_text}
