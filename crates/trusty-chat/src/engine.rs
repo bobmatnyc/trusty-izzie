@@ -249,10 +249,17 @@ impl ChatEngine {
 
         let mut lines = vec!["## Connected Google Accounts".to_string()];
         for acc in &active {
-            // Primary account has full scope (Calendar, Tasks, Drive, Gmail).
-            // Secondary accounts were added with Gmail + userinfo scope only.
+            // Determine capabilities by checking whether a token row exists.
+            // Accounts authorized with calendar scope will have an oauth_tokens row.
+            // Primary always has full scope; secondary may have calendar if re-authed.
+            let has_token = sqlite
+                .get_access_token(&acc.email)
+                .unwrap_or(None)
+                .is_some();
             let capabilities = if acc.email == primary_email {
                 "calendar, tasks, email, drive"
+            } else if has_token {
+                "calendar, email"
             } else {
                 "email"
             };
@@ -266,10 +273,7 @@ impl ChatEngine {
             ));
         }
         lines.push(String::new());
-        lines.push(format!(
-            "Calendar and Tasks always use **{}** (the only account with those scopes).",
-            primary_email
-        ));
+        lines.push("To query a specific account's calendar, pass `account_email` to `get_calendar_events`.".to_string());
         lines.push("Email relationship context covers all connected accounts.".to_string());
 
         lines.join("\n")
@@ -951,12 +955,29 @@ impl ChatEngine {
     }
 
     async fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
-        let primary_email =
-            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
-        let access_token = match self.get_valid_token(&primary_email).await {
+        // Use account_email if provided, otherwise fall back to primary.
+        let target_email = input["account_email"]
+            .as_str()
+            .filter(|e| !e.is_empty())
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| {
+                std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string())
+            });
+        let access_token = match self.get_valid_token(&target_email).await {
             Ok(t) => t,
             Err(_) => {
-                // Fall back to kv_config for backward compat.
+                // If a specific account was requested, give a targeted error.
+                if input["account_email"]
+                    .as_str()
+                    .filter(|e| !e.is_empty())
+                    .is_some()
+                {
+                    return Ok(format!(
+                        "No calendar access for {}. The account may not have been authorized with calendar scope. Try re-authorizing with /auth.",
+                        target_email
+                    ));
+                }
+                // Fall back to kv_config for backward compat with primary.
                 match self.sqlite_ref()?.get_config("google_access_token")? {
                     Some(t) if !t.is_empty() => t,
                     _ => return Ok(
@@ -1716,7 +1737,7 @@ I can check my own service status with `check_service_status`, report my version
 
 ## What I Can Do
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
-- **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7).
+- **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal).
 - **Google Tasks**: I can list task lists via `get_task_lists` and fetch tasks via `get_tasks`.
 
 ## Available Tools (complete list)
@@ -1728,7 +1749,7 @@ I can check my own service status with `check_service_status`, report my version
 - `list_events` — list scheduled or recent events, optionally filtered by status
 - `run_agent` — enqueue a background research agent task
 - `list_agents` — list available agent definitions
-- `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30)
+- `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30, account_email=<email> to query a specific account's calendar)
 - `get_task_lists` — list the user's Google Task lists (uses TRUSTY_PRIMARY_EMAIL)
 - `get_tasks` — fetch tasks from a list (optional: list_id, max_results, show_completed; default: incomplete tasks from primary list)
 - `get_agent_task` — get the status and output of an agent task by ID
