@@ -954,48 +954,15 @@ impl ChatEngine {
         serde_json::to_string(&results).context("failed to serialize WhatsApp results")
     }
 
-    async fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
-        // Use account_email if provided, otherwise fall back to primary.
-        let target_email = input["account_email"]
-            .as_str()
-            .filter(|e| !e.is_empty())
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| {
-                std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string())
-            });
-        let access_token = match self.get_valid_token(&target_email).await {
-            Ok(t) => t,
-            Err(_) => {
-                // If a specific account was requested, give a targeted error.
-                if input["account_email"]
-                    .as_str()
-                    .filter(|e| !e.is_empty())
-                    .is_some()
-                {
-                    return Ok(format!(
-                        "No calendar access for {}. The account may not have been authorized with calendar scope. Try re-authorizing with /auth.",
-                        target_email
-                    ));
-                }
-                // Fall back to kv_config for backward compat with primary.
-                match self.sqlite_ref()?.get_config("google_access_token")? {
-                    Some(t) if !t.is_empty() => t,
-                    _ => return Ok(
-                        "I don't have a Google access token yet. Use /auth in Telegram or ask me to `add_account` to connect your Google account.".to_string()
-                    ),
-                }
-            }
-        };
+    async fn fetch_calendar_events_for(&self, email: &str, days: i64) -> Result<Vec<String>> {
+        let access_token = self.get_valid_token(email).await?;
 
-        // Parse optional parameters.
-        let days = input["days"].as_i64().unwrap_or(7).clamp(1, 30);
         let now = chrono::Utc::now();
         let time_min = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let time_max = (now + chrono::Duration::days(days))
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
 
-        // Call Google Calendar API.
         let url = format!(
             "https://www.googleapis.com/calendar/v3/calendars/primary/events\
              ?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=20",
@@ -1012,29 +979,16 @@ impl ChatEngine {
             .await
             .map_err(|e| anyhow::anyhow!("Calendar API parse failed: {e}"))?;
 
-        // Check for auth errors.
-        if let Some(err) = events_json.get("error") {
-            let msg = err["message"].as_str().unwrap_or("unknown error");
-            if err["code"].as_i64() == Some(401) {
-                return Ok(format!(
-                    "My Google access token has expired. Use /auth to reconnect. ({})",
-                    msg
-                ));
-            }
-            return Ok(format!("Google Calendar error: {}", msg));
+        if events_json.get("error").is_some() {
+            return Ok(vec![]);
         }
 
         let items = match events_json["items"].as_array() {
-            Some(a) => a,
-            None => return Ok("No calendar events found.".to_string()),
+            Some(a) if !a.is_empty() => a,
+            _ => return Ok(vec![]),
         };
 
-        if items.is_empty() {
-            return Ok(format!("No events in the next {} days.", days));
-        }
-
-        // Format events for the LLM.
-        let mut lines = vec![format!("Upcoming events (next {} days):", days)];
+        let mut lines = Vec::new();
         for item in items {
             let summary = item["summary"].as_str().unwrap_or("(no title)");
             let start = item["start"]["dateTime"]
@@ -1053,7 +1007,57 @@ impl ChatEngine {
             }
             lines.push(line);
         }
-        Ok(lines.join("\n"))
+        Ok(lines)
+    }
+
+    async fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
+        let account_email = input["account_email"].as_str().filter(|e| !e.is_empty());
+        let days = input["days"].as_i64().unwrap_or(7).clamp(1, 30);
+
+        if let Some(email) = account_email {
+            if self.get_valid_token(email).await.is_err() {
+                return Ok(format!(
+                    "No calendar access for {}. The account may not have been authorized with calendar scope. Try re-authorizing with /auth.",
+                    email
+                ));
+            }
+            let lines = self.fetch_calendar_events_for(email, days).await?;
+            if lines.is_empty() {
+                return Ok(format!("No events in the next {} days.", days));
+            }
+            let mut out = vec![format!("Upcoming events (next {} days):", days)];
+            out.extend(lines);
+            return Ok(out.join("\n"));
+        }
+
+        // No account specified — query all accounts with valid tokens.
+        let accounts = self.sqlite_ref()?.list_accounts()?;
+        let mut all_sections = Vec::new();
+        for acc in &accounts {
+            match self.fetch_calendar_events_for(&acc.email, days).await {
+                Ok(lines) if !lines.is_empty() => {
+                    let label = if acc.identity == "work" {
+                        "Work calendar"
+                    } else {
+                        "Personal calendar"
+                    };
+                    all_sections.push(format!(
+                        "**{}** ({}):\n{}",
+                        label,
+                        acc.email,
+                        lines.join("\n")
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if all_sections.is_empty() {
+            return Ok(format!(
+                "No events in the next {} days across all accounts.",
+                days
+            ));
+        }
+        Ok(all_sections.join("\n\n"))
     }
 
     async fn tool_get_task_lists(&self) -> Result<String> {
