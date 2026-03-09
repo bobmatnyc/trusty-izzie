@@ -1497,7 +1497,9 @@ impl ChatEngine {
             let role = match msg.role {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
-                MessageRole::Tool => "tool",
+                // Anthropic has no "tool" role in the OpenAI-compat API without tool_call_id.
+                // Treat persisted tool results as user messages so history alternates correctly.
+                MessageRole::Tool => "user",
                 MessageRole::System => "system",
             };
             llm_messages.push(OrchatMessage {
