@@ -408,6 +408,12 @@ struct IncomingUpdate {
 }
 
 #[derive(Deserialize)]
+struct ReplyMessage {
+    text: Option<String>,
+    caption: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct IncomingMessage {
     message_id: i64,
     chat: IncomingChat,
@@ -416,6 +422,7 @@ struct IncomingMessage {
     document: Option<IncomingDocument>,
     caption: Option<String>,
     location: Option<IncomingLocation>,
+    reply_to_message: Option<ReplyMessage>,
 }
 
 #[derive(Deserialize)]
@@ -953,6 +960,7 @@ async fn webhook_handler(
         return StatusCode::OK;
     }
 
+    let reply_context = msg.reply_to_message;
     let text = match msg.text {
         Some(t) => t,
         None => return StatusCode::OK,
@@ -1061,7 +1069,20 @@ async fn webhook_handler(
     let user_ctx = state.user_context.clone();
     let min_occ = state.min_occurrences;
     let gdrive_token = state.gdrive_token.clone();
-    let text_clone = text.clone();
+    let text_clone = if let Some(ref reply) = reply_context {
+        let reply_text = reply
+            .text
+            .as_deref()
+            .or(reply.caption.as_deref())
+            .unwrap_or("");
+        if !reply_text.is_empty() {
+            format!("[Replying to: \"{}\"]\n{}", reply_text, text)
+        } else {
+            text.clone()
+        }
+    } else {
+        text.clone()
+    };
     let memory_store = Arc::clone(&state.memory_store);
     let memory_user_id = state.user_context.user_id.clone();
     let session_manager = Arc::clone(&state.session_manager);
