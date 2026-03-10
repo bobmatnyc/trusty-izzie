@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use rusqlite::{Connection, OpenFlags};
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// (source, contact, text) triple returned from each DB query.
 type MsgRow = (i64, Vec<(String, String, String)>);
@@ -42,6 +42,128 @@ impl EventHandler for MessageInterruptCheckHandler {
             next,
         )]))
     }
+}
+
+/// Open the macOS AddressBook SQLite database read-only.
+/// Returns `None` (with a debug log) if the file is missing or inaccessible
+/// (e.g. Full Disk Access not granted).
+fn open_address_book() -> Option<Connection> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!(
+        "{}/Library/Application Support/AddressBook/AddressBook-v22.abcddb",
+        home
+    );
+    match Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(conn) => Some(conn),
+        Err(e) => {
+            debug!("AddressBook DB unavailable (contact resolution disabled): {e}");
+            None
+        }
+    }
+}
+
+/// Try to resolve a raw handle (phone number or WhatsApp JID) to a human name.
+///
+/// - For iMessage handles like `+13476843267` the full handle is used as the
+///   search key.
+/// - For WhatsApp JIDs like `13476843267@s.whatsapp.net` the digits before `@`
+///   are extracted first.
+///
+/// Returns `None` if no match is found or the DB is unavailable.
+fn resolve_contact_name(conn: &Connection, handle: &str) -> Option<String> {
+    // Normalise: extract digit-only portion from WhatsApp JIDs.
+    let search_handle = if let Some(jid) = handle.split('@').next() {
+        if handle.contains('@') {
+            jid
+        } else {
+            handle
+        }
+    } else {
+        handle
+    };
+
+    let sql = "SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION \
+               FROM ZABCDRECORD r \
+               LEFT JOIN ZABCDPHONENUMBER p ON p.ZOWNER = r.Z_PK \
+               WHERE p.ZFULLNUMBER LIKE ?1 \
+               LIMIT 1";
+
+    let param = format!("%{}%", search_handle);
+    let result = conn
+        .query_row(sql, rusqlite::params![param], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .ok();
+
+    if let Some((first, last, org)) = result {
+        match (first.as_deref(), last.as_deref()) {
+            (Some(f), Some(l)) if !f.is_empty() && !l.is_empty() => {
+                return Some(format!("{} {}", f, l));
+            }
+            (Some(f), _) if !f.is_empty() => return Some(f.to_string()),
+            (_, Some(l)) if !l.is_empty() => return Some(l.to_string()),
+            _ => {}
+        }
+        if let Some(o) = org.as_deref() {
+            if !o.is_empty() {
+                return Some(o.to_string());
+            }
+        }
+        // Matched a row but no usable name — fall through to digit-strip retry.
+    }
+
+    // Second attempt: strip non-digit chars from handle and compare against
+    // stored numbers with punctuation removed.
+    let digits_only: String = search_handle
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect();
+    if digits_only.is_empty() || digits_only == search_handle {
+        return None; // Nothing new to try.
+    }
+
+    let sql2 = "SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION \
+                FROM ZABCDRECORD r \
+                LEFT JOIN ZABCDPHONENUMBER p ON p.ZOWNER = r.Z_PK \
+                WHERE replace(replace(replace(replace(p.ZFULLNUMBER,' ',''),'-',''),'(',''),')','') \
+                      LIKE ?1 \
+                LIMIT 1";
+
+    let param2 = format!("%{}%", digits_only);
+    let result2 = conn
+        .query_row(sql2, rusqlite::params![param2], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .ok();
+
+    if let Some((first, last, org)) = result2 {
+        match (first.as_deref(), last.as_deref()) {
+            (Some(f), Some(l)) if !f.is_empty() && !l.is_empty() => {
+                return Some(format!("{} {}", f, l));
+            }
+            (Some(f), _) if !f.is_empty() => return Some(f.to_string()),
+            (_, Some(l)) if !l.is_empty() => return Some(l.to_string()),
+            _ => {}
+        }
+        if let Some(o) = org.as_deref() {
+            if !o.is_empty() {
+                return Some(o.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
@@ -238,6 +360,9 @@ async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
         return Ok(());
     }
 
+    // Open AddressBook once for the whole notification loop (None = unavailable).
+    let ab_conn = open_address_book();
+
     // Build notification.
     let mut notification = format!(
         "<b>{} message{} need your attention:</b>\n\n",
@@ -250,9 +375,13 @@ async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
         } else {
             msg.2.clone()
         };
+        let display_name = ab_conn
+            .as_ref()
+            .and_then(|conn| resolve_contact_name(conn, &msg.1))
+            .unwrap_or_else(|| msg.1.clone());
         notification.push_str(&format!(
             "- <b>{}</b> via {}\n  {}\n  <i>{}</i>\n\n",
-            msg.1, msg.0, preview, reason
+            display_name, msg.0, preview, reason
         ));
     }
 
