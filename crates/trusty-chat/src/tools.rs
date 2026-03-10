@@ -89,6 +89,8 @@ pub enum ToolName {
     SearchContacts,
     /// Search WhatsApp Desktop message history by contact or keyword.
     SearchWhatsapp,
+    /// Create a new event on Google Calendar.
+    CreateCalendarEvent,
 }
 
 /// A parsed tool call request from the LLM.

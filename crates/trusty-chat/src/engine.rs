@@ -153,6 +153,7 @@ impl ChatEngine {
             ToolName::SyncWhatsApp => self.tool_sync_whatsapp(input),
             ToolName::ExecuteShellCommand => self.tool_execute_shell_command(input).await,
             ToolName::GetCalendarEvents => self.tool_get_calendar_events(input).await,
+            ToolName::CreateCalendarEvent => self.tool_create_calendar_event(input).await,
             ToolName::GetPreferences => self.tool_get_preferences(),
             ToolName::SetPreference => self.tool_set_preference(input),
             ToolName::AddVipContact => self.tool_add_vip_contact(input),
@@ -1060,6 +1061,106 @@ impl ChatEngine {
         Ok(all_sections.join("\n\n"))
     }
 
+    async fn tool_create_calendar_event(&self, input: &serde_json::Value) -> Result<String> {
+        let account_email = input["account_email"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if account_email.is_empty() {
+            return Ok("Failed to create event: account_email is required".to_string());
+        }
+        let title = input["title"].as_str().unwrap_or("").trim().to_string();
+        if title.is_empty() {
+            return Ok("Failed to create event: title is required".to_string());
+        }
+        let start_datetime = input["start_datetime"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let end_datetime = input["end_datetime"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if start_datetime.is_empty() || end_datetime.is_empty() {
+            return Ok(
+                "Failed to create event: start_datetime and end_datetime are required".to_string(),
+            );
+        }
+
+        let access_token = match self.get_valid_token(&account_email).await {
+            Ok(t) => t,
+            Err(e) => {
+                return Ok(format!(
+                    "Failed to create event: no calendar access for {} — {}",
+                    account_email, e
+                ))
+            }
+        };
+
+        let mut body = serde_json::json!({
+            "summary": title,
+            "start": {"dateTime": start_datetime, "timeZone": "America/New_York"},
+            "end":   {"dateTime": end_datetime,   "timeZone": "America/New_York"},
+        });
+
+        if let Some(desc) = input["description"].as_str().filter(|s| !s.is_empty()) {
+            body["description"] = serde_json::Value::String(desc.to_string());
+        }
+
+        if let Some(attendees) = input["attendees"].as_array() {
+            let list: Vec<serde_json::Value> = attendees
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|email| serde_json::json!({"email": email}))
+                .collect();
+            if !list.is_empty() {
+                body["attendees"] = serde_json::Value::Array(list);
+            }
+        }
+
+        let resp: serde_json::Value = match self
+            .http
+            .post("https://www.googleapis.com/calendar/v3/calendars/primary/events")
+            .bearer_auth(&access_token)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => match r.json::<serde_json::Value>().await {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(format!(
+                        "Failed to create event: could not parse API response — {}",
+                        e
+                    ))
+                }
+            },
+            Err(e) => {
+                return Ok(format!(
+                    "Failed to create event: API request failed — {}",
+                    e
+                ))
+            }
+        };
+
+        if let Some(err) = resp.get("error") {
+            let msg = err["message"].as_str().unwrap_or("unknown error");
+            return Ok(format!(
+                "Failed to create event: Google API error — {}",
+                msg
+            ));
+        }
+
+        let html_link = resp["htmlLink"].as_str().unwrap_or("");
+        Ok(format!(
+            "Event created: '{}' starting {}. Calendar link: {}",
+            title, start_datetime, html_link
+        ))
+    }
+
     async fn tool_get_task_lists(&self) -> Result<String> {
         let primary_email =
             std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
@@ -1766,7 +1867,7 @@ I can check my own service status with `check_service_status`, report my version
 
 ## What I Can Do
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
-- **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal).
+- **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
 - **Google Tasks**: I can list task lists via `get_task_lists` and fetch tasks via `get_tasks`.
 
 ## Available Tools (complete list)
@@ -1779,6 +1880,7 @@ I can check my own service status with `check_service_status`, report my version
 - `run_agent` — enqueue a background research agent task
 - `list_agents` — list available agent definitions
 - `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30, account_email=<email> to query a specific account's calendar)
+- `create_calendar_event` — create a new Google Calendar event. Required: account_email, title, start_datetime (RFC3339), end_datetime (RFC3339). Optional: description, attendees (array of email strings).
 - `get_task_lists` — list the user's Google Task lists (uses TRUSTY_PRIMARY_EMAIL)
 - `get_tasks` — fetch tasks from a list (optional: list_id, max_results, show_completed; default: incomplete tasks from primary list)
 - `get_agent_task` — get the status and output of an agent task by ID
@@ -1846,6 +1948,12 @@ If a tool returns no data (e.g. no calendar events), say so honestly. Never inve
 ## Identity & Account Inference
 
 **MANDATORY CALENDAR RULE**: When the user asks about their schedule, agenda, meetings, or calendar for any day/period — you MUST call `get_calendar_events` once for EACH account that has "calendar" in its capabilities list. Never check only one account and stop. Always combine and label results before replying.
+
+**MANDATORY SCHEDULING RULE**: When someone says "let me know what works", "my [time] is open", or asks to schedule a meeting:
+1. Call `search_contacts` if you have a phone number or name to identify the person
+2. Call `get_calendar_events` for the relevant days to find free slots
+3. Suggest 2–3 specific times (with day, date, and time)
+4. Ask the user to confirm which slot works, then call `create_calendar_event` with their choice
 
 When the user asks about calendar, email, or tasks, infer which account to use from context:
 
