@@ -402,7 +402,7 @@ async fn run_chat(args: ChatArgs, config: AppConfig) -> Result<()> {
 
     let client = reqwest::Client::new();
     let resp: Resp = client
-        .post(format!("{base_url}/v1/chat"))
+        .post(format!("{base_url}/chat"))
         .json(&Req {
             message: &message,
             session_id: session_id.as_deref(),

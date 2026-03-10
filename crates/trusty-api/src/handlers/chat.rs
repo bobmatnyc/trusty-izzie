@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
-/// Request body for `POST /v1/chat`.
+/// Request body for `POST /chat`.
 #[derive(Deserialize)]
 pub struct CreateMessageRequest {
     /// The user's message text.
@@ -20,38 +20,38 @@ pub struct CreateMessageRequest {
     pub session_id: Option<Uuid>,
 }
 
-/// Response body for `POST /v1/chat`.
+/// Response body for `POST /chat`.
 #[derive(Serialize)]
 pub struct CreateMessageResponse {
     pub session_id: Uuid,
     pub reply: String,
 }
 
-/// `POST /v1/chat` — send a message and receive a reply.
+/// `POST /chat` — send a message and receive a reply.
 pub async fn create_message(
     State(_state): State<AppState>,
     Json(_body): Json<CreateMessageRequest>,
 ) -> Result<Json<CreateMessageResponse>, StatusCode> {
-    todo!("route message through ChatEngine and return StructuredResponse.reply")
+    Err(StatusCode::NOT_IMPLEMENTED)
 }
 
-/// `GET /v1/chat/sessions` — list all sessions for the authenticated user.
-pub async fn list_sessions(State(_state): State<AppState>) -> Json<Value> {
-    todo!("load session list from SessionManager")
+/// `GET /chat/sessions` — list all sessions for the authenticated user.
+pub async fn list_sessions(State(_state): State<AppState>) -> Result<Json<Value>, StatusCode> {
+    Err(StatusCode::NOT_IMPLEMENTED)
 }
 
-/// `GET /v1/chat/sessions/:session_id` — retrieve a single session with messages.
+/// `GET /chat/sessions/:session_id` — retrieve a single session with messages.
 pub async fn get_session(
     State(_state): State<AppState>,
     Path(_session_id): Path<Uuid>,
 ) -> Result<Json<Value>, StatusCode> {
-    todo!("load session by ID from SessionManager")
+    Err(StatusCode::NOT_IMPLEMENTED)
 }
 
-/// `DELETE /v1/chat/sessions/:session_id` — delete a session.
+/// `DELETE /chat/sessions/:session_id` — delete a session.
 pub async fn delete_session(
     State(_state): State<AppState>,
     Path(_session_id): Path<Uuid>,
-) -> StatusCode {
-    todo!("delete session from SQLite")
+) -> Result<(), StatusCode> {
+    Err(StatusCode::NOT_IMPLEMENTED)
 }

@@ -1509,7 +1509,7 @@ async fn run_webhook(
 
     let app = Router::new()
         .route("/health", get(health_handler))
-        .route("/v1/chat", post(chat_handler))
+        .route("/chat", post(chat_handler))
         .route("/webhook/telegram", post(webhook_handler))
         .route("/api/auth/google/callback", get(oauth_callback_handler))
         .layer(tower_governor::GovernorLayer {
