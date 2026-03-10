@@ -220,7 +220,7 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
     });
 
     let ipc_task = tokio::spawn(async move {
-        ipc_server
+        if let Err(err) = ipc_server
             .serve(|cmd| {
                 use trusty_daemon::ipc::{DaemonCommand, DaemonResponse};
                 match cmd {
@@ -233,6 +233,9 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
                 }
             })
             .await
+        {
+            tracing::warn!("IPC server exited with error: {err:#}");
+        }
     });
 
     daemon_loop
@@ -247,6 +250,11 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
 }
 
 /// Send a control command to a running daemon via IPC.
-async fn send_ipc_command(_socket_path: &str, _command: &str) -> Result<()> {
-    todo!("connect to Unix socket and send DaemonCommand JSON, print DaemonResponse")
+async fn send_ipc_command(socket_path: &str, command: &str) -> Result<()> {
+    tracing::warn!(
+        socket_path = socket_path,
+        command = command,
+        "IPC client not yet implemented; command was not sent"
+    );
+    Ok(())
 }

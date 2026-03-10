@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// Messages the CLI can send to the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +52,7 @@ impl IpcServer {
         &self,
         _handler: impl Fn(DaemonCommand) -> DaemonResponse + Send + 'static,
     ) -> Result<()> {
-        todo!("bind Unix domain socket with interprocess and dispatch DaemonCommand messages")
+        warn!(socket_path = %self.socket_path, "IPC server not yet implemented; skipping Unix socket bind");
+        Ok(())
     }
 }
