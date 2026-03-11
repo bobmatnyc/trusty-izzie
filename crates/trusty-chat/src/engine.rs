@@ -164,7 +164,7 @@ impl ChatEngine {
             ToolName::ListWatchSubscriptions => self.tool_list_watch_subscriptions(),
             ToolName::ListOpenLoops => self.tool_list_open_loops(),
             ToolName::DismissOpenLoop => self.tool_dismiss_open_loop(input),
-            ToolName::GetTaskLists => self.tool_get_task_lists().await,
+            ToolName::GetTaskLists => self.tool_get_task_lists(input).await,
             ToolName::GetTasks => self.tool_get_tasks(input).await,
             ToolName::SearchImessages => self.tool_search_imessages(input),
             ToolName::SearchContacts => self.tool_search_contacts(input),
@@ -1161,12 +1161,14 @@ impl ChatEngine {
         ))
     }
 
-    async fn tool_get_task_lists(&self) -> Result<String> {
+    async fn tool_get_task_lists(&self, input: &serde_json::Value) -> Result<String> {
+        let account_email = input["account_email"].as_str().filter(|e| !e.is_empty());
         let primary_email =
             std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
-        let access_token = match self.get_valid_token(&primary_email).await {
+        let email = account_email.unwrap_or(&primary_email);
+        let access_token = match self.get_valid_token(email).await {
             Ok(t) => t,
-            Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
+            Err(e) => return Ok(format!("Cannot access Tasks for {email}: {e}")),
         };
 
         let lists: serde_json::Value = self
@@ -1187,12 +1189,13 @@ impl ChatEngine {
 
         let items = lists["items"].as_array();
         match items.map(|v| v.as_slice()) {
-            None | Some([]) => Ok("No task lists found.".to_string()),
+            None | Some([]) => Ok(format!("No task lists found for {email}.")),
             Some(lists) => {
                 let result: Vec<serde_json::Value> = lists
                     .iter()
                     .map(|l| {
                         serde_json::json!({
+                            "account": email,
                             "id": l["id"].as_str().unwrap_or(""),
                             "title": l["title"].as_str().unwrap_or("(untitled)"),
                         })
@@ -1204,11 +1207,13 @@ impl ChatEngine {
     }
 
     async fn tool_get_tasks(&self, input: &serde_json::Value) -> Result<String> {
+        let account_email = input["account_email"].as_str().filter(|e| !e.is_empty());
         let primary_email =
             std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
-        let access_token = match self.get_valid_token(&primary_email).await {
+        let email = account_email.unwrap_or(&primary_email);
+        let access_token = match self.get_valid_token(email).await {
             Ok(t) => t,
-            Err(e) => return Ok(format!("Cannot access Tasks: {e}")),
+            Err(e) => return Ok(format!("Cannot access Tasks for {email}: {e}")),
         };
 
         // Optional: caller can specify a list ID; defaults to "@default".
@@ -1868,7 +1873,7 @@ I can check my own service status with `check_service_status`, report my version
 ## What I Can Do
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
-- **Google Tasks**: I can list task lists via `get_task_lists` and fetch tasks via `get_tasks`.
+- **Google Tasks**: I can list task lists via `get_task_lists` and fetch tasks via `get_tasks`. Pass `account_email` to query a specific account's tasks.
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
@@ -1881,8 +1886,8 @@ I can check my own service status with `check_service_status`, report my version
 - `list_agents` — list available agent definitions
 - `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30, account_email=<email> to query a specific account's calendar)
 - `create_calendar_event` — create a new Google Calendar event. Required: account_email, title, start_datetime (RFC3339), end_datetime (RFC3339). Optional: description, attendees (array of email strings).
-- `get_task_lists` — list the user's Google Task lists (uses TRUSTY_PRIMARY_EMAIL)
-- `get_tasks` — fetch tasks from a list (optional: list_id, max_results, show_completed; default: incomplete tasks from primary list)
+- `get_task_lists` — list the user's Google Task lists (optional: account_email to query a specific account)
+- `get_tasks` — fetch tasks from a list (optional: account_email, list_id, max_results, show_completed; default: incomplete tasks from primary list)
 - `get_agent_task` — get the status and output of an agent task by ID
 - `list_accounts` — list connected Google accounts and their sync status
 - `add_account` — add a new Google account (returns OAuth URL; run `/auth` in Telegram for full scope including Calendar and Tasks)
@@ -1948,6 +1953,8 @@ If a tool returns no data (e.g. no calendar events), say so honestly. Never inve
 ## Identity & Account Inference
 
 **MANDATORY CALENDAR RULE**: When the user asks about their schedule, agenda, meetings, or calendar for any day/period — you MUST call `get_calendar_events` once for EACH account that has "calendar" in its capabilities list. Never check only one account and stop. Always combine and label results before replying.
+
+**MANDATORY TASKS RULE**: When the user asks about tasks, to-dos, or their task lists — you MUST call `get_task_lists` once for EACH account that has "tasks" in its capabilities list, then call `get_tasks` for each task list found in each account. Combine and label all results before replying. Never query only one account.
 
 **MANDATORY SCHEDULING RULE**: When someone says "let me know what works", "my [time] is open", or asks to schedule a meeting:
 1. Call `search_contacts` if you have a phone number or name to identify the person
