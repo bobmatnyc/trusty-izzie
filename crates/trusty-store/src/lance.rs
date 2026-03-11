@@ -719,12 +719,27 @@ fn memory_from_batch(batch: &RecordBatch, row: usize) -> Result<Option<Memory>> 
         }
     };
 
+    // Read the stored embedding from the "vector" FixedSizeListArray column.
+    let embedding = batch
+        .column_by_name("vector")
+        .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>())
+        .and_then(|fsl| {
+            if fsl.is_null(row) {
+                return None;
+            }
+            let values = fsl.value(row);
+            values
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .map(|fa| fa.values().to_vec())
+        });
+
     Ok(Some(Memory {
         id,
         user_id,
         category: memory_category_from_str(&category_str),
         content,
-        embedding: None,
+        embedding,
         related_entities,
         source_id,
         importance: get_f32("importance"),
