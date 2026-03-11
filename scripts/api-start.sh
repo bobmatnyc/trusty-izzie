@@ -8,7 +8,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 API_BIN="$PROJECT_DIR/target/release/trusty-api"
 PID_FILE="/tmp/trusty-api.pid"
 LOG_FILE="/tmp/trusty-api.log"
-PORT=3456
+PORT=3457
 
 if [[ ! -x "$API_BIN" ]]; then
     echo "✗ API binary not found: $API_BIN"
