@@ -71,19 +71,10 @@ async fn get_valid_token(sqlite: &SqliteStore, user_id: &str) -> anyhow::Result<
 }
 
 async fn fetch_todays_context(sqlite: &SqliteStore) -> DailyContext {
-    let email = std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_default();
-    if email.is_empty() {
-        warn!("TRUSTY_PRIMARY_EMAIL not set; skipping Google context for morning briefing");
-        return DailyContext {
-            events: vec![],
-            tasks: vec![],
-        };
-    }
-
-    let access_token = match get_valid_token(sqlite, &email).await {
-        Ok(t) => t,
+    let accounts = match sqlite.list_accounts() {
+        Ok(a) => a,
         Err(e) => {
-            warn!("Could not get OAuth token for morning briefing context: {e}");
+            warn!("Could not list accounts for morning briefing: {e}");
             return DailyContext {
                 events: vec![],
                 tasks: vec![],
@@ -91,14 +82,48 @@ async fn fetch_todays_context(sqlite: &SqliteStore) -> DailyContext {
         }
     };
 
-    let http = reqwest::Client::new();
-    let events = fetch_calendar_events(&http, &access_token).await;
-    let tasks = fetch_open_tasks(&http, &access_token).await;
+    let active: Vec<_> = accounts.into_iter().filter(|a| a.is_active).collect();
+    if active.is_empty() {
+        warn!("No active accounts found for morning briefing");
+        return DailyContext {
+            events: vec![],
+            tasks: vec![],
+        };
+    }
 
-    DailyContext { events, tasks }
+    let http = reqwest::Client::new();
+    let mut all_events = Vec::new();
+    let mut all_tasks = Vec::new();
+
+    for account in &active {
+        let access_token = match get_valid_token(sqlite, &account.email).await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(
+                    "Could not get OAuth token for {} in morning briefing: {e}",
+                    account.email
+                );
+                continue;
+            }
+        };
+        let tag = format!("[{}: {}]", account.identity, account.email);
+        let events = fetch_calendar_events(&http, &access_token, &tag).await;
+        let tasks = fetch_open_tasks(&http, &access_token, &tag).await;
+        all_events.extend(events);
+        all_tasks.extend(tasks);
+    }
+
+    DailyContext {
+        events: all_events,
+        tasks: all_tasks,
+    }
 }
 
-async fn fetch_calendar_events(http: &reqwest::Client, access_token: &str) -> Vec<String> {
+async fn fetch_calendar_events(
+    http: &reqwest::Client,
+    access_token: &str,
+    tag: &str,
+) -> Vec<String> {
     let now = chrono::Utc::now();
     let time_min = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let time_max = (now + chrono::Duration::days(1))
@@ -157,12 +182,13 @@ async fn fetch_calendar_events(http: &reqwest::Client, access_token: &str) -> Ve
         if attendee_count > 1 {
             line.push_str(&format!(" ({} attendees)", attendee_count));
         }
+        line.push_str(&format!(" {}", tag));
         lines.push(line);
     }
     lines
 }
 
-async fn fetch_open_tasks(http: &reqwest::Client, access_token: &str) -> Vec<String> {
+async fn fetch_open_tasks(http: &reqwest::Client, access_token: &str, tag: &str) -> Vec<String> {
     let lists_resp: serde_json::Value = match http
         .get("https://tasks.googleapis.com/tasks/v1/users/@me/lists")
         .bearer_auth(access_token)
@@ -227,6 +253,7 @@ async fn fetch_open_tasks(http: &reqwest::Client, access_token: &str) -> Vec<Str
                     line.push_str(&format!(" (due: {})", dt.format("%b %d")));
                 }
             }
+            line.push_str(&format!(" {}", tag));
             all_tasks.push(line);
         }
     }
@@ -295,7 +322,7 @@ async fn generate_briefing(
     let prompt = format!(
         "You are Izzie, a personal AI assistant. Generate a warm, personalized good morning \
 briefing based on what's ahead today. 3-5 sentences max. Be friendly and helpful.\n\n\
-Today's calendar (next 24h):\n{}\n\nOpen tasks:\n{}",
+Today's calendar (next 24h, all accounts):\n{}\n\nOpen tasks (all accounts):\n{}",
         events_text, tasks_text
     );
 
