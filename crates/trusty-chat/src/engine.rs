@@ -260,7 +260,7 @@ impl ChatEngine {
             let capabilities = if acc.email == primary_email {
                 "calendar, tasks, email, drive"
             } else if has_token {
-                "calendar, email"
+                "calendar, tasks, email"
             } else {
                 "email"
             };
