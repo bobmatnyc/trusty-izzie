@@ -63,3 +63,11 @@ docs/research/
 
 # MCP configuration (machine-specific paths — copy .mcp.json.example instead)
 .mcp.json
+
+# Website build outputs and Vercel config (machine-specific)
+website/.vercel/
+website/.next/
+website/out/
+
+# Process ID files
+*.pid

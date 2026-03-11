@@ -17,8 +17,38 @@ use trusty_models::config::AppConfig;
 use trusty_models::{EventPayload, EventType};
 use trusty_store::{SqliteStore, Store};
 
-/// Single-tenant instance ID (SHA256 of primary email, first 16 hex chars).
-const INSTANCE_ID: &str = "42a923e9bd673e38";
+/// Load or generate a persistent instance ID.
+///
+/// Resolution order:
+/// 1. `TRUSTY_INSTANCE_ID` env var
+/// 2. `~/.local/share/trusty-izzie/instance.json` → `"instance_id"` field
+/// 3. Generate a random 16-hex-char string and write it to the file
+fn load_instance_id() -> String {
+    if let Ok(id) = std::env::var("TRUSTY_INSTANCE_ID") {
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    let path = {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join(".local/share/trusty-izzie/instance.json")
+    };
+    if let Ok(bytes) = std::fs::read(&path) {
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if let Some(id) = val.get("instance_id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    return id.to_string();
+                }
+            }
+        }
+    }
+    let id = format!("{:016x}", uuid::Uuid::new_v4().as_u128() as u64);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, serde_json::json!({"instance_id": id}).to_string());
+    id
+}
 
 /// Command-line interface for the daemon process.
 #[derive(Parser)]
@@ -128,7 +158,7 @@ fn midnight_ts() -> i64 {
 /// Run the daemon event loop: IPC server + event dispatcher.
 async fn run_daemon(config: AppConfig) -> Result<()> {
     let data_dir = expand_data_dir(&config);
-    let store = Arc::new(Store::open_lazy_kuzu(&data_dir, INSTANCE_ID).await?);
+    let store = Arc::new(Store::open_lazy_kuzu(&data_dir, &load_instance_id()).await?);
 
     // Seed recurring events (idempotent — no-op if already pending).
     let now = chrono::Utc::now().timestamp();

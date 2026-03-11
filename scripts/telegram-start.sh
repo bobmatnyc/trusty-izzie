@@ -37,8 +37,9 @@ fi
 echo "▶ Starting trusty-telegram bot…"
 echo "  Log → $TG_LOG_FILE"
 
+export RUST_BACKTRACE=1
 nohup "$TG_BIN" start \
-    --webhook-url https://izzie.ngrok.dev/webhook/telegram \
+    --webhook-url "${TRUSTY_PUBLIC_URL:-https://localhost:3456}/webhook/telegram" \
     --port 3456 \
     >> "$TG_LOG_FILE" 2>&1 &
 TG_PID=$!

@@ -47,6 +47,43 @@ use er_persist::persist_extraction_result;
 use gdrive::spawn_drive_enrichment;
 
 // ---------------------------------------------------------------------------
+// Instance ID
+// ---------------------------------------------------------------------------
+
+/// Load or generate a persistent instance ID.
+///
+/// Resolution order:
+/// 1. `TRUSTY_INSTANCE_ID` env var
+/// 2. `~/.local/share/trusty-izzie/instance.json` → `"instance_id"` field
+/// 3. Generate a random 16-hex-char string and write it to the file
+fn load_instance_id() -> String {
+    if let Ok(id) = std::env::var("TRUSTY_INSTANCE_ID") {
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    let path = {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join(".local/share/trusty-izzie/instance.json")
+    };
+    if let Ok(bytes) = std::fs::read(&path) {
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if let Some(id) = val.get("instance_id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    return id.to_string();
+                }
+            }
+        }
+    }
+    let id = format!("{:016x}", uuid::Uuid::new_v4().as_u128() as u64);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, serde_json::json!({"instance_id": id}).to_string());
+    id
+}
+
+// ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
 
@@ -1719,8 +1756,8 @@ async fn main() -> Result<()> {
                 .filter_map(|s| s.trim().parse().ok())
                 .collect();
 
-            const INSTANCE_ID: &str = "42a923e9bd673e38";
-            let store = Arc::new(Store::open(&data_dir, INSTANCE_ID).await?);
+            let instance_id = load_instance_id();
+            let store = Arc::new(Store::open(&data_dir, &instance_id).await?);
             let embedder = Arc::new(
                 Embedder::new(EmbeddingModel::AllMiniLmL6V2)
                     .map_err(|e| anyhow!("failed to init embedder: {e}"))?,
@@ -1740,7 +1777,7 @@ async fn main() -> Result<()> {
             // Build user context from environment / config.
             let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_default();
             let user_context = UserContext {
-                user_id: INSTANCE_ID.to_string(),
+                user_id: instance_id.clone(),
                 email: primary_email.clone(),
                 display_name: primary_email.clone(),
             };
@@ -1792,7 +1829,7 @@ async fn main() -> Result<()> {
                     allowed,
                     poll_session_manager,
                     Arc::clone(&memory_store),
-                    INSTANCE_ID.to_string(),
+                    instance_id.clone(),
                 )
                 .await;
             } else {

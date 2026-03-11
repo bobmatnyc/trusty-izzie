@@ -56,6 +56,69 @@ All data stays on your machine. Embeddings are generated locally via fastembed (
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Prerequisites
+
+- **Rust 1.75+** — install via [rustup](https://rustup.rs/)
+- **macOS** (recommended) — Linux is experimental; Windows is unsupported
+- **Google Cloud Console project** — for Gmail, Calendar, Tasks, and People API access
+- **OpenRouter account** — for LLM inference ([openrouter.ai](https://openrouter.ai))
+- **ngrok** (optional) — to expose localhost publicly for Telegram webhooks or remote OAuth callbacks
+- **Telegram account** (optional) — only needed for the Telegram bot interface
+
+## Google OAuth Setup
+
+trusty-izzie uses Google OAuth 2.0 to read your Gmail and Calendar data. Follow these steps once before the first run:
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create a new project (or select an existing one).
+
+2. Enable the following APIs under **APIs & Services → Library**:
+   - Gmail API
+   - Google Calendar API
+   - Tasks API
+   - People API
+
+3. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**.
+   - Application type: **Desktop app** (simplest for local use)
+   - Give it a name and click **Create**
+
+4. Under **Authorized redirect URIs**, add:
+   - `http://localhost:8080` (for local development)
+   - Your public domain callback if using ngrok, e.g. `https://myngrok.ngrok.io/api/auth/google/callback`
+
+5. Copy the **Client ID** and **Client Secret** into your `.env` file:
+   ```
+   GOOGLE_CLIENT_ID=...
+   GOOGLE_CLIENT_SECRET=...
+   ```
+
+6. Run the authentication flow:
+   ```bash
+   cargo run --bin trusty -- auth google
+   ```
+   This opens your browser for consent. Tokens are stored locally in SQLite and refreshed automatically.
+
+## Telegram Integration
+
+The Telegram bot is optional. It gives you a mobile-friendly chat interface to the same AI assistant.
+
+1. Open Telegram and search for **@BotFather**.
+2. Send `/newbot`, follow the prompts, and copy the bot token.
+3. Set the token in `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=your_bot_token_here
+   ```
+4. Set your public URL (required for webhook mode — use ngrok or a real domain):
+   ```
+   TRUSTY_PUBLIC_URL=https://your.public.domain
+   ```
+5. Build and start the bot:
+   ```bash
+   cargo build --release
+   ./scripts/telegram-start.sh
+   ```
+
+Without `TRUSTY_PUBLIC_URL`, the bot falls back to long-polling mode (`--poll` flag), which works without a public domain.
+
 ## Quick Start
 
 ```bash

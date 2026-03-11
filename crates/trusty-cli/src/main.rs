@@ -19,8 +19,40 @@ use trusty_store::{SqliteStore, Store};
 
 use crate::log::{append_interaction, InteractionLog};
 
-const INSTANCE_ID: &str = "42a923e9bd673e38";
 const SESSION_KEY: &str = "chat:current_session";
+
+/// Load or generate a persistent instance ID.
+///
+/// Resolution order:
+/// 1. `TRUSTY_INSTANCE_ID` env var
+/// 2. `~/.local/share/trusty-izzie/instance.json` → `"instance_id"` field
+/// 3. Generate a random 16-hex-char string and write it to the file
+fn load_instance_id() -> String {
+    if let Ok(id) = std::env::var("TRUSTY_INSTANCE_ID") {
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    let path = {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join(".local/share/trusty-izzie/instance.json")
+    };
+    if let Ok(bytes) = std::fs::read(&path) {
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if let Some(id) = val.get("instance_id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    return id.to_string();
+                }
+            }
+        }
+    }
+    let id = format!("{:016x}", uuid::Uuid::new_v4().as_u128() as u64);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, serde_json::json!({"instance_id": id}).to_string());
+    id
+}
 
 /// A personal AI assistant that learns from your email.
 #[derive(Parser)]
@@ -232,7 +264,7 @@ fn open_sqlite(config: &AppConfig) -> Result<Arc<SqliteStore>> {
 /// Open full Store (LanceDB + Kuzu + SQLite).
 async fn open_store(config: &AppConfig) -> Result<Arc<Store>> {
     let dir = data_dir(config);
-    Ok(Arc::new(Store::open(&dir, INSTANCE_ID).await?))
+    Ok(Arc::new(Store::open(&dir, &load_instance_id()).await?))
 }
 
 fn is_tty() -> bool {
@@ -726,8 +758,11 @@ async fn run_auth(config: AppConfig) -> Result<()> {
         );
     }
 
-    let redirect_uri = "https://izzie.ngrok.dev/api/auth/google/callback".to_string();
-    let auth_client = GoogleAuthClient::new(client_id, client_secret, redirect_uri);
+    let redirect_uri = format!(
+        "https://{}/api/auth/google/callback",
+        std::env::var("TRUSTY_PUBLIC_DOMAIN").unwrap_or_else(|_| "localhost:3456".to_string())
+    );
+    let auth_client = GoogleAuthClient::new(client_id, client_secret, redirect_uri.clone());
 
     // Generate PKCE pair and store verifier for the axum callback handler.
     let (verifier, challenge) = generate_pkce_pair();
@@ -747,7 +782,7 @@ async fn run_auth(config: AppConfig) -> Result<()> {
     let _ = std::process::Command::new(opener).arg(&auth_url).status();
 
     // Poll SQLite for google_access_token written by the axum callback handler.
-    println!("Waiting for OAuth callback via https://izzie.ngrok.dev/api/auth/google/callback …");
+    println!("Waiting for OAuth callback via {} …", redirect_uri);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;

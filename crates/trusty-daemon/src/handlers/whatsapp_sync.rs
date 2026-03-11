@@ -109,7 +109,7 @@ impl EventHandler for WhatsAppSyncHandler {
             _ => (None, false),
         };
 
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/masa".to_string());
+        let home = std::env::var("HOME").expect("HOME environment variable must be set");
 
         let messages: Vec<WaMessage> = if let Some(ref path) = export_path {
             // Parse exported .txt file.

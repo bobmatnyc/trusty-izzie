@@ -46,6 +46,7 @@ fi
 echo "▶ Starting trusty-daemon ($PROFILE)…"
 echo "  Log → $LOG_FILE"
 
+export RUST_BACKTRACE=1
 nohup "$DAEMON_BIN" start --foreground >> "$LOG_FILE" 2>&1 &
 DAEMON_PID=$!
 echo "$DAEMON_PID" > "$PID_FILE"

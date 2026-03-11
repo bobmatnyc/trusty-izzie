@@ -69,7 +69,7 @@ impl EventHandler for MessagesSyncHandler {
             _ => false,
         };
 
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/masa".to_string());
+        let home = std::env::var("HOME").expect("HOME environment variable must be set");
         let db_path = format!("{home}/Library/Messages/chat.db");
 
         if !std::path::Path::new(&db_path).exists() {
