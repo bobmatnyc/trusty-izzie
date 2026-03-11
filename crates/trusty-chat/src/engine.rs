@@ -2067,6 +2067,7 @@ fn parse_response(raw: &str) -> StructuredResponse {
     }
 
     // 4. Fallback: treat the whole raw string as a plain-text reply.
+    tracing::warn!("parse_response fallback: treating raw LLM output as plain text reply");
     StructuredResponse {
         reply: raw.to_string(),
         memories_to_save: vec![],
