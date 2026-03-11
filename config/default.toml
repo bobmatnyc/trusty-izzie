@@ -23,7 +23,7 @@ min_occurrences = 2
 max_relationships_per_email = 3
 
 [chat]
-max_tool_iterations = 5
+max_tool_iterations = 20
 context_memory_limit = 10
 context_entity_limit = 15
 session_compression_threshold = 20
