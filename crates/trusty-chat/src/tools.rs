@@ -83,6 +83,8 @@ pub enum ToolName {
     GetTaskLists,
     /// Fetch tasks from a Google Task list (default: all incomplete tasks).
     GetTasks,
+    /// Fetch ALL task lists and ALL tasks for one account in a single call.
+    GetTasksBulk,
     /// Search iMessage history by contact or keyword (direct read from chat.db).
     SearchImessages,
     /// Search macOS Address Book contacts by name, email, or phone.

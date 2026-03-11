@@ -166,6 +166,7 @@ impl ChatEngine {
             ToolName::DismissOpenLoop => self.tool_dismiss_open_loop(input),
             ToolName::GetTaskLists => self.tool_get_task_lists(input).await,
             ToolName::GetTasks => self.tool_get_tasks(input).await,
+            ToolName::GetTasksBulk => self.tool_get_tasks_bulk(input).await,
             ToolName::SearchImessages => self.tool_search_imessages(input),
             ToolName::SearchContacts => self.tool_search_contacts(input),
             ToolName::SearchWhatsapp => self.tool_search_whatsapp(input),
@@ -1276,6 +1277,96 @@ impl ChatEngine {
         }
     }
 
+    async fn tool_get_tasks_bulk(&self, input: &serde_json::Value) -> Result<String> {
+        let account_email = input["account_email"].as_str().filter(|e| !e.is_empty());
+        let primary_email =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
+        let email = account_email.unwrap_or(&primary_email);
+        let access_token = match self.get_valid_token(email).await {
+            Ok(t) => t,
+            Err(e) => return Ok(format!("Cannot access Tasks for {email}: {e}")),
+        };
+
+        // Step 1: fetch all task lists.
+        let lists_resp: serde_json::Value = self
+            .http
+            .get("https://tasks.googleapis.com/tasks/v1/users/@me/lists")
+            .bearer_auth(&access_token)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+
+        if let Some(err) = lists_resp.get("error") {
+            return Ok(format!(
+                "Tasks API error: {}",
+                err["message"].as_str().unwrap_or("unknown")
+            ));
+        }
+
+        let list_items = match lists_resp["items"].as_array() {
+            None => return Ok(format!("No task lists found for {email}.")),
+            Some(items) if items.is_empty() => {
+                return Ok(format!("No task lists found for {email}."));
+            }
+            Some(items) => items.clone(),
+        };
+
+        // Step 2: for each list, fetch incomplete tasks and format output.
+        let mut output_sections: Vec<String> = Vec::new();
+        for list in &list_items {
+            let list_id = list["id"].as_str().unwrap_or("@default");
+            let list_title = list["title"].as_str().unwrap_or("(untitled)");
+
+            let url = format!(
+                "https://tasks.googleapis.com/tasks/v1/lists/{}/tasks?maxResults=100&showCompleted=false&showHidden=false",
+                list_id
+            );
+            let tasks_resp: serde_json::Value = self
+                .http
+                .get(&url)
+                .bearer_auth(&access_token)
+                .send()
+                .await?
+                .json::<serde_json::Value>()
+                .await?;
+
+            if tasks_resp.get("error").is_some() {
+                continue; // skip lists we can't read
+            }
+
+            let tasks = match tasks_resp["items"].as_array() {
+                None => continue,
+                Some(t) if t.is_empty() => continue,
+                Some(t) => t.clone(),
+            };
+
+            let mut lines = vec![format!("**{}** (account: {})", list_title, email)];
+            for task in &tasks {
+                let title = task["title"].as_str().unwrap_or("(untitled)");
+                let due = task["due"].as_str().unwrap_or("");
+                let notes = task["notes"].as_str().unwrap_or("");
+                let mut line = format!("- [ ] {}", title);
+                if !due.is_empty() {
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(due) {
+                        line.push_str(&format!(" (due: {})", dt.format("%b %d")));
+                    }
+                }
+                if !notes.is_empty() {
+                    line.push_str(&format!(" — {}", &notes[..notes.len().min(80)]));
+                }
+                lines.push(line);
+            }
+            output_sections.push(lines.join("\n"));
+        }
+
+        if output_sections.is_empty() {
+            Ok(format!("No incomplete tasks found for {email}."))
+        } else {
+            Ok(output_sections.join("\n\n"))
+        }
+    }
+
     fn tool_list_accounts(&self) -> Result<String> {
         let sqlite = self.sqlite_ref()?;
         let accounts = sqlite.list_accounts()?;
@@ -1873,7 +1964,7 @@ I can check my own service status with `check_service_status`, report my version
 ## What I Can Do
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
-- **Google Tasks**: I can list task lists via `get_task_lists` and fetch tasks via `get_tasks`. Pass `account_email` to query a specific account's tasks.
+- **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations.
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
@@ -1886,6 +1977,7 @@ I can check my own service status with `check_service_status`, report my version
 - `list_agents` — list available agent definitions
 - `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30, account_email=<email> to query a specific account's calendar)
 - `create_calendar_event` — create a new Google Calendar event. Required: account_email, title, start_datetime (RFC3339), end_datetime (RFC3339). Optional: description, attendees (array of email strings).
+- `get_tasks_bulk` — fetches ALL task lists and ALL tasks for one account in a single call. Use this instead of get_task_lists + get_tasks. Required param: account_email.
 - `get_task_lists` — list the user's Google Task lists (optional: account_email to query a specific account)
 - `get_tasks` — fetch tasks from a list (optional: account_email, list_id, max_results, show_completed; default: incomplete tasks from primary list)
 - `get_agent_task` — get the status and output of an agent task by ID
@@ -1939,7 +2031,7 @@ After tool results are injected into the conversation, give your final answer wi
 NEVER fabricate factual information. For these topics you MUST call the appropriate tool — never answer from memory or training data:
 - Calendar / schedule / meetings → `get_calendar_events`
 - Scheduled tasks / reminders / events → `list_events`
-- Tasks / to-dos → `get_tasks` or `get_task_lists`
+- Tasks / to-dos → `get_tasks_bulk` (preferred) or `get_task_lists` + `get_tasks`
 - Google accounts → `list_accounts`
 - Service health / running processes → `check_service_status`
 - Any file system, shell, or system state query → `execute_shell_command`
@@ -1954,7 +2046,7 @@ If a tool returns no data (e.g. no calendar events), say so honestly. Never inve
 
 **MANDATORY CALENDAR RULE**: When the user asks about their schedule, agenda, meetings, or calendar for any day/period — you MUST call `get_calendar_events` once for EACH account that has "calendar" in its capabilities list. Never check only one account and stop. Always combine and label results before replying.
 
-**MANDATORY TASKS RULE**: When the user asks about tasks, to-dos, or their task lists — you MUST call `get_task_lists` once for EACH account that has "tasks" in its capabilities list, then call `get_tasks` for each task list found in each account. Combine and label all results before replying. Never query only one account.
+**MANDATORY TASKS RULE**: When the user asks about tasks or to-dos, you MUST call `get_tasks_bulk` once for EACH account that has "tasks" in its capabilities list. This single call returns all lists and all tasks for that account. Combine results from all accounts before replying. Never query only one account.
 
 **MANDATORY SCHEDULING RULE**: When someone says "let me know what works", "my [time] is open", or asks to schedule a meeting:
 1. Call `search_contacts` if you have a phone number or name to identify the person
