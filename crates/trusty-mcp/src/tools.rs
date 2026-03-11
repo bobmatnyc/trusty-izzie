@@ -4,12 +4,31 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use trusty_chat::engine::ChatEngine;
 use trusty_chat::tools::ToolName;
+use trusty_chat::SessionManager;
 
 use crate::protocol::Tool;
 
 /// All MCP tools exposed by trusty-izzie.
 pub fn all_tools() -> Vec<Tool> {
     vec![
+        Tool {
+            name: "chat",
+            description: "Ask Izzie an open-ended question in natural language. She has full access to your contacts, calendar, tasks, emails, memories, and knowledge graph, and will use whichever tools are needed to answer. Use this when the query doesn't fit a more specific tool.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Your question or request in natural language"
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional session ID to continue a previous conversation thread"
+                    }
+                },
+                "required": ["message"]
+            }),
+        },
         Tool {
             name: "search_contacts",
             description: "Search your macOS AddressBook contacts by name, email, or phone number",
@@ -162,6 +181,7 @@ pub fn all_tools() -> Vec<Tool> {
 /// Dispatch a tool call by name to the ChatEngine.
 pub async fn dispatch(engine: &ChatEngine, name: &str, arguments: &Value) -> Result<String> {
     match name {
+        "chat" => tool_chat(engine, arguments).await,
         "search_contacts" => {
             engine
                 .execute_tool(&ToolName::SearchContacts, arguments)
@@ -221,6 +241,25 @@ pub async fn dispatch(engine: &ChatEngine, name: &str, arguments: &Value) -> Res
         }
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
     }
+}
+
+/// Open-ended chat: runs a full Izzie turn (with tool calls) and returns the reply.
+///
+/// The `session_id` argument is accepted but currently unused — each MCP call
+/// gets a fresh ephemeral session. Stateful multi-turn support can be added later
+/// by persisting sessions keyed by `session_id`.
+async fn tool_chat(engine: &ChatEngine, arguments: &Value) -> Result<String> {
+    let message = arguments["message"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing required parameter: message"))?;
+
+    // Ephemeral session — no persistence across MCP calls for now.
+    let mut session = SessionManager::new_session("mcp");
+
+    let response = engine.chat(&mut session, message).await?;
+
+    // Return the plain text reply; ignore any trailing tool calls.
+    Ok(response.reply)
 }
 
 /// Composite context tool: memories + entities + calendar for a query.
