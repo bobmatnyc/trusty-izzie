@@ -93,6 +93,8 @@ pub enum ToolName {
     SearchWhatsapp,
     /// Create a new event on Google Calendar.
     CreateCalendarEvent,
+    /// Mark a Google Task as complete.
+    CompleteTask,
 }
 
 /// A parsed tool call request from the LLM.

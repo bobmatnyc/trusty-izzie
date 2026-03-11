@@ -167,6 +167,7 @@ impl ChatEngine {
             ToolName::GetTaskLists => self.tool_get_task_lists(input).await,
             ToolName::GetTasks => self.tool_get_tasks(input).await,
             ToolName::GetTasksBulk => self.tool_get_tasks_bulk(input).await,
+            ToolName::CompleteTask => self.tool_complete_task(input).await,
             ToolName::SearchImessages => self.tool_search_imessages(input),
             ToolName::SearchContacts => self.tool_search_contacts(input),
             ToolName::SearchWhatsapp => self.tool_search_whatsapp(input),
@@ -1372,6 +1373,50 @@ impl ChatEngine {
         }
     }
 
+    async fn tool_complete_task(&self, input: &serde_json::Value) -> Result<String> {
+        let account_email = input["account_email"].as_str().filter(|e| !e.is_empty());
+        let primary_email =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
+        let email = account_email.unwrap_or(&primary_email);
+        let access_token = match self.get_valid_token(email).await {
+            Ok(t) => t,
+            Err(e) => return Ok(format!("Cannot access Tasks for {email}: {e}")),
+        };
+
+        let task_list_id = match input["task_list_id"].as_str().filter(|s| !s.is_empty()) {
+            Some(id) => id,
+            None => return Ok("Missing required parameter: task_list_id".to_string()),
+        };
+        let task_id = match input["task_id"].as_str().filter(|s| !s.is_empty()) {
+            Some(id) => id,
+            None => return Ok("Missing required parameter: task_id".to_string()),
+        };
+
+        let url = format!(
+            "https://tasks.googleapis.com/tasks/v1/lists/{}/tasks/{}",
+            task_list_id, task_id
+        );
+        let resp = self
+            .http
+            .patch(&url)
+            .bearer_auth(&access_token)
+            .json(&serde_json::json!({"status": "completed"}))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if status.is_success() {
+            Ok("Task marked complete.".to_string())
+        } else {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
+            Ok(format!(
+                "Failed to complete task (HTTP {}): {}",
+                status, msg
+            ))
+        }
+    }
+
     fn tool_list_accounts(&self) -> Result<String> {
         let sqlite = self.sqlite_ref()?;
         let accounts = sqlite.list_accounts()?;
@@ -1973,7 +2018,7 @@ I can check my own service status with `check_service_status`, report my version
 ## What I Can Do
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
-- **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations.
+- **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
@@ -1989,6 +2034,7 @@ I can check my own service status with `check_service_status`, report my version
 - `get_tasks_bulk` — fetches ALL task lists and ALL tasks for one account in a single call. Use this instead of get_task_lists + get_tasks. Required param: account_email.
 - `get_task_lists` — list the user's Google Task lists (optional: account_email to query a specific account)
 - `get_tasks` — fetch tasks from a list (optional: account_email, list_id, max_results, show_completed; default: incomplete tasks from primary list)
+- `complete_task(account_email, task_list_id, task_id)` — Mark a Google Task as complete. Use get_tasks_bulk first to find the task_list_id and task_id.
 - `get_agent_task` — get the status and output of an agent task by ID
 - `list_accounts` — list connected Google accounts and their sync status
 - `add_account` — add a new Google account (returns OAuth URL; run `/auth` in Telegram for full scope including Calendar and Tasks)

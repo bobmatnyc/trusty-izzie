@@ -72,6 +72,19 @@ pub fn all_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "complete_task",
+            description: "Mark a Google Task as complete. Use get_tasks_bulk first to find the task_list_id and task_id.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "account_email": { "type": "string", "description": "Google account email" },
+                    "task_list_id": { "type": "string", "description": "Task list ID (from get_tasks_bulk)" },
+                    "task_id": { "type": "string", "description": "Task ID to mark complete (from get_tasks_bulk)" }
+                },
+                "required": ["account_email", "task_list_id", "task_id"]
+            }),
+        },
+        Tool {
             name: "get_tasks_bulk",
             description: "Fetch all task lists and all incomplete tasks for a Google account in a single call",
             input_schema: json!({
@@ -195,6 +208,11 @@ pub async fn dispatch(engine: &ChatEngine, name: &str, arguments: &Value) -> Res
         "create_calendar_event" => {
             engine
                 .execute_tool(&ToolName::CreateCalendarEvent, arguments)
+                .await
+        }
+        "complete_task" => {
+            engine
+                .execute_tool(&ToolName::CompleteTask, arguments)
                 .await
         }
         "get_tasks_bulk" => {
