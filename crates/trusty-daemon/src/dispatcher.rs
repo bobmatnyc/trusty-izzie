@@ -64,7 +64,10 @@ impl EventDispatcher {
             Box::new(ContactsSyncHandler),
             Box::new(MessagesSyncHandler),
             Box::new(WhatsAppSyncHandler),
-            Box::new(EntityExtractionHandler),
+            Box::new(EntityExtractionHandler::new(
+                openrouter_base.clone(),
+                openrouter_api_key.clone(),
+            )),
             Box::new(MemoryDecayHandler),
             Box::new(CalendarRefreshHandler),
             Box::new(AgentRunHandler::new(

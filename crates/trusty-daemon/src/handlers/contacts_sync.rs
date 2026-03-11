@@ -283,7 +283,14 @@ impl EventHandler for ContactsSyncHandler {
         }
 
         info!("Contacts sync complete");
-        Ok(DispatchResult::Done)
+
+        // Re-schedule self in 6 hours.
+        let next_at = chrono::Utc::now().timestamp() + 6 * 3600;
+        Ok(DispatchResult::Chain(vec![(
+            EventType::ContactsSync,
+            EventPayload::ContactsSync { force: false },
+            next_at,
+        )]))
     }
 }
 
