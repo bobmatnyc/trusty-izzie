@@ -2,9 +2,9 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Izzie — Local-first AI Assistant',
+  title: 'Izzie — Local-first AI Assistant for Mac',
   description:
-    'Izzie is a local-first AI assistant for Mac. No cloud, no subscriptions. Chat via Telegram.',
+    'Open-source AI assistant that learns from your Gmail and calendar. Runs entirely on your Mac. Chat via Telegram. Self-host your own Izzie.',
   icons: {
     icon: '/favicon.svg',
     apple: '/favicon.png',
