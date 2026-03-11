@@ -170,7 +170,10 @@ impl ChatEngine {
             ToolName::SearchImessages => self.tool_search_imessages(input),
             ToolName::SearchContacts => self.tool_search_contacts(input),
             ToolName::SearchWhatsapp => self.tool_search_whatsapp(input),
-            _ => Ok("Tool not yet implemented.".to_string()),
+            _ => {
+                tracing::warn!(tool = ?name, "tool called but not yet implemented");
+                Ok("Tool not yet implemented.".to_string())
+            }
         }
     }
 
@@ -1616,12 +1619,16 @@ impl ChatEngine {
 
         tracing::info!(command = %command, "tool_execute_shell_command: executing");
 
-        let output = tokio::process::Command::new("bash")
-            .arg("-c")
-            .arg(command)
-            .output()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to spawn command: {e}"))?;
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            tokio::process::Command::new("bash")
+                .arg("-c")
+                .arg(command)
+                .output(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Shell command timed out after 30 seconds"))?
+        .map_err(|e| anyhow::anyhow!("Failed to spawn command: {e}"))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);

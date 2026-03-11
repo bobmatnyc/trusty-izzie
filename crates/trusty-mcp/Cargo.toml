@@ -1,0 +1,35 @@
+[package]
+name = "trusty-mcp"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "trusty-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+tokio-stream = { workspace = true }
+
+# Intra-workspace
+trusty-store = { path = "../trusty-store" }
+trusty-chat = { path = "../trusty-chat" }
+trusty-core = { path = "../trusty-core" }
+trusty-models = { path = "../trusty-models" }
+trusty-memory = { path = "../trusty-memory" }
+trusty-embeddings = { path = "../trusty-embeddings" }

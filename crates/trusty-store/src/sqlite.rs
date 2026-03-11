@@ -34,7 +34,10 @@ impl SqliteStore {
 
     /// Run schema migrations to ensure all tables exist.
     fn migrate(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute_batch(
             r#"
             PRAGMA journal_mode=WAL;
@@ -209,7 +212,10 @@ impl SqliteStore {
 
     /// Persist or update a Gmail history cursor for `user_id`.
     pub fn upsert_gmail_cursor(&self, cursor: &GmailHistoryCursor) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             r#"
             INSERT INTO gmail_cursors (user_id, last_history_id, last_synced_at, messages_processed)
@@ -231,7 +237,10 @@ impl SqliteStore {
 
     /// Retrieve the Gmail history cursor for `user_id`, if one exists.
     pub fn get_gmail_cursor(&self, user_id: &str) -> Result<Option<GmailHistoryCursor>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT user_id, last_history_id, last_synced_at, messages_processed FROM gmail_cursors WHERE user_id = ?1",
         )?;
@@ -271,7 +280,10 @@ impl SqliteStore {
         expires_at: Option<i64>,
         scopes: Option<&str>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             r#"
             INSERT INTO oauth_tokens (user_id, access_token, refresh_token, expires_at, scopes)
@@ -298,7 +310,10 @@ impl SqliteStore {
         refresh_token: Option<&str>,
         expires_at: Option<i64>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             r#"UPDATE oauth_tokens
                SET access_token  = ?1,
@@ -312,7 +327,10 @@ impl SqliteStore {
 
     /// Retrieve the stored OAuth2 access token for `user_id`.
     pub fn get_access_token(&self, user_id: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare("SELECT access_token FROM oauth_tokens WHERE user_id = ?1")?;
         let result = stmt
             .query_row(rusqlite::params![user_id], |row| row.get(0))
@@ -322,7 +340,10 @@ impl SqliteStore {
 
     /// Set a key-value config entry.
     pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             r#"
             INSERT INTO kv_config (key, value) VALUES (?1, ?2)
@@ -336,7 +357,10 @@ impl SqliteStore {
 
     /// Get a key-value config entry.
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare("SELECT value FROM kv_config WHERE key = ?1")?;
         let result = stmt
             .query_row(rusqlite::params![key], |row| row.get(0))
@@ -353,7 +377,10 @@ impl SqliteStore {
         entity_type: &str,
         normalized_name: &str,
     ) -> Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let rows_affected = conn.execute(
             r#"
             INSERT INTO entity_fingerprints (fingerprint, entity_id, entity_type, normalized_name)
@@ -378,7 +405,10 @@ impl SqliteStore {
 
     /// Return the current seen_count for a fingerprint (0 if not found).
     pub fn get_fingerprint_count(&self, fp: &str) -> Result<u32> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt =
             conn.prepare("SELECT seen_count FROM entity_fingerprints WHERE fingerprint = ?1")?;
         let result: Option<u32> = stmt
@@ -389,7 +419,10 @@ impl SqliteStore {
 
     /// Mark a fingerprint as graduated (written to LanceDB + Kuzu).
     pub fn mark_fingerprint_graduated(&self, fp: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE entity_fingerprints SET graduated = 1 WHERE fingerprint = ?1",
             rusqlite::params![fp],
@@ -399,7 +432,10 @@ impl SqliteStore {
 
     /// Mark a fingerprint as spam (skip forever).
     pub fn mark_fingerprint_spam(&self, fp: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE entity_fingerprints SET is_spam = 1 WHERE fingerprint = ?1",
             rusqlite::params![fp],
@@ -409,7 +445,10 @@ impl SqliteStore {
 
     /// Create a new chat session.
     pub fn create_session(&self, id: &str, title: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             r#"
             INSERT INTO chat_sessions (id, title)
@@ -423,7 +462,10 @@ impl SqliteStore {
 
     /// Get a chat session by ID. Returns `(id, title, created_at)`.
     pub fn get_session(&self, id: &str) -> Result<Option<(String, Option<String>, i64)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt =
             conn.prepare("SELECT id, title, created_at FROM chat_sessions WHERE id = ?1")?;
         let result = stmt
@@ -443,7 +485,10 @@ impl SqliteStore {
         content: &str,
         tokens: Option<i32>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             r#"
             INSERT INTO chat_messages (id, session_id, role, content, tokens)
@@ -467,7 +512,10 @@ impl SqliteStore {
     /// List the N most recently active chat sessions.
     /// Returns `Vec<(id, title, last_active_at)>`.
     pub fn list_recent_sessions(&self, limit: usize) -> Result<Vec<(String, Option<String>, i64)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT id, title, last_active_at FROM chat_sessions ORDER BY last_active_at DESC LIMIT ?1",
         )?;
@@ -489,7 +537,10 @@ impl SqliteStore {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<(String, String, String, i64)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         // Fetch newest N rows first, then reverse for chronological order.
         let mut stmt = conn.prepare(
             "SELECT id, role, content, created_at FROM chat_messages \
@@ -505,7 +556,10 @@ impl SqliteStore {
     }
 
     pub fn get_messages(&self, session_id: &str) -> Result<Vec<(String, String, String, i64)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT id, role, content, created_at FROM chat_messages WHERE session_id = ?1 ORDER BY created_at ASC",
         )?;
@@ -535,7 +589,10 @@ impl SqliteStore {
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let payload_json = serde_json::to_string(payload)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "INSERT INTO event_queue (id, event_type, payload, scheduled_at, priority, max_retries, source, parent_event_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -558,7 +615,10 @@ impl SqliteStore {
     /// Returns `None` if no claimable event exists.
     pub fn claim_next_event(&self) -> Result<Option<QueuedEvent>> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
 
         let maybe_row = conn.query_row(
             "SELECT id, event_type, payload, priority, scheduled_at, created_at,
@@ -649,7 +709,10 @@ impl SqliteStore {
     /// Mark an event as successfully completed.
     pub fn complete_event(&self, id: &str) -> Result<()> {
         let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE event_queue SET status = 'done', completed_at = ?1 WHERE id = ?2",
             rusqlite::params![now, id],
@@ -659,7 +722,10 @@ impl SqliteStore {
 
     /// Mark an event as failed. `retry_after` is a Unix timestamp; `None` means no retry.
     pub fn fail_event(&self, id: &str, error: &str, retry_after: Option<i64>) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE event_queue SET status = 'failed', error = ?1, retry_after = ?2 WHERE id = ?3",
             rusqlite::params![error, retry_after, id],
@@ -669,7 +735,10 @@ impl SqliteStore {
 
     /// Cancel a pending or failed event.
     pub fn cancel_event(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE event_queue SET status = 'cancelled'
              WHERE id = ?1 AND status IN ('pending', 'failed')",
@@ -690,7 +759,10 @@ impl SqliteStore {
         parent_event_id: Option<&str>,
     ) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "INSERT INTO agent_tasks (id, agent_name, task_description, status, model, created_at, parent_event_id)
              VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6)",
@@ -709,7 +781,10 @@ impl SqliteStore {
         error: Option<&str>,
     ) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE agent_tasks SET status = ?1, output = ?2, error = ?3 WHERE id = ?4",
             rusqlite::params![status, output, error, id],
@@ -730,7 +805,10 @@ impl SqliteStore {
 
     /// Retrieve a single agent task by ID.
     pub fn get_agent_task(&self, id: &str) -> Result<Option<AgentTask>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT id, agent_name, task_description, status, model, output, error,
                     created_at, started_at, completed_at, parent_event_id
@@ -758,7 +836,10 @@ impl SqliteStore {
 
     /// List agent tasks, optionally filtered by status, newest first.
     pub fn list_agent_tasks(&self, status: Option<&str>, limit: usize) -> Result<Vec<AgentTask>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
 
         fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentTask> {
             Ok(AgentTask {
@@ -803,7 +884,10 @@ impl SqliteStore {
     /// Seed the primary account at startup (INSERT OR IGNORE — idempotent).
     pub fn seed_primary_account(&self, email: &str) -> Result<()> {
         let id = format!("primary-{}", email);
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             r#"
             INSERT OR IGNORE INTO accounts (id, email, display_name, account_type, is_active, identity)
@@ -816,7 +900,10 @@ impl SqliteStore {
 
     /// List all accounts ordered by type ('primary' first), then created_at.
     pub fn list_accounts(&self) -> Result<Vec<trusty_models::Account>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT id, email, display_name, account_type, is_active, created_at, identity
              FROM accounts
@@ -850,7 +937,10 @@ impl SqliteStore {
         account_type: &str,
     ) -> Result<()> {
         let id = format!("{}-{}", account_type, email);
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             r#"
             INSERT INTO accounts (id, email, display_name, account_type, is_active, identity)
@@ -867,7 +957,10 @@ impl SqliteStore {
 
     /// Deactivate a secondary account (is_active = 0). Returns Err if primary or not found.
     pub fn deactivate_account(&self, email: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let account_type: Option<String> = conn
             .query_row(
                 "SELECT account_type FROM accounts WHERE email = ?1",
@@ -891,7 +984,10 @@ impl SqliteStore {
 
     /// Get a single account by email.
     pub fn get_account(&self, email: &str) -> Result<Option<trusty_models::Account>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT id, email, display_name, account_type, is_active, created_at, identity
              FROM accounts WHERE email = ?1",
@@ -916,7 +1012,10 @@ impl SqliteStore {
 
     /// Update the identity ("work" | "personal") for an account.
     pub fn update_account_identity(&self, email: &str, identity: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE accounts SET identity = ?1 WHERE email = ?2",
             rusqlite::params![identity, email],
@@ -926,7 +1025,10 @@ impl SqliteStore {
 
     /// Get OAuth token row by user_id (= email).
     pub fn get_oauth_token(&self, user_id: &str) -> Result<Option<trusty_models::OAuthToken>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT user_id, access_token, refresh_token, expires_at
              FROM oauth_tokens WHERE user_id = ?1",
@@ -957,7 +1059,10 @@ impl SqliteStore {
         tool_calls: Option<&str>,
     ) -> Result<()> {
         let id = Uuid::new_v4().to_string();
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "INSERT INTO telegram_logs (id, direction, chat_id, user_id, username, message, tool_calls)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -968,7 +1073,10 @@ impl SqliteStore {
 
     /// List events, optionally filtered by status, newest first.
     pub fn list_events(&self, status_filter: Option<&str>, limit: i64) -> Result<Vec<QueuedEvent>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
 
         fn ts(ts: i64) -> DateTime<Utc> {
             DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
@@ -1030,7 +1138,10 @@ impl SqliteStore {
     // ── User preferences ──────────────────────────────────────────────────────
 
     pub fn get_pref(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare("SELECT value FROM user_prefs WHERE key = ?1")?;
         let result = stmt
             .query_row(rusqlite::params![key], |row| row.get(0))
@@ -1039,7 +1150,10 @@ impl SqliteStore {
     }
 
     pub fn set_pref(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "INSERT INTO user_prefs (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1049,7 +1163,10 @@ impl SqliteStore {
     }
 
     pub fn list_all_prefs(&self) -> Result<Vec<(String, String)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare("SELECT key, value FROM user_prefs ORDER BY key")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut prefs = Vec::new();
@@ -1062,7 +1179,10 @@ impl SqliteStore {
     // ── VIP contacts ──────────────────────────────────────────────────────────
 
     pub fn upsert_vip_contact(&self, email: &str, name: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "INSERT INTO vip_contacts (email, name) VALUES (?1, ?2)
              ON CONFLICT(email) DO UPDATE SET name = excluded.name",
@@ -1072,7 +1192,10 @@ impl SqliteStore {
     }
 
     pub fn list_vip_contacts(&self) -> Result<Vec<(String, Option<String>)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare("SELECT email, name FROM vip_contacts ORDER BY email")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut contacts = Vec::new();
@@ -1083,7 +1206,10 @@ impl SqliteStore {
     }
 
     pub fn remove_vip_contact(&self, email: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "DELETE FROM vip_contacts WHERE email = ?1",
             rusqlite::params![email],
@@ -1100,7 +1226,10 @@ impl SqliteStore {
         context: Option<&str>,
         follow_up_at: i64,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "INSERT INTO open_loops (id, description, context, follow_up_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -1111,7 +1240,10 @@ impl SqliteStore {
     }
 
     pub fn list_open_loops(&self, status: Option<&str>) -> Result<Vec<trusty_models::OpenLoopRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut loops = Vec::new();
         if let Some(s) = status {
             let mut stmt = conn.prepare(
@@ -1152,7 +1284,10 @@ impl SqliteStore {
     }
 
     pub fn close_open_loop(&self, id: &str, status: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE open_loops SET status = ?1 WHERE id = ?2",
             rusqlite::params![status, id],
@@ -1163,7 +1298,10 @@ impl SqliteStore {
     // ── Watch subscriptions ───────────────────────────────────────────────────
 
     pub fn add_watch_subscription(&self, id: &str, topic: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "INSERT INTO watch_subscriptions (id, topic) VALUES (?1, ?2)
              ON CONFLICT(id) DO UPDATE SET topic = excluded.topic, is_active = 1",
@@ -1173,7 +1311,10 @@ impl SqliteStore {
     }
 
     pub fn list_watch_subscriptions(&self) -> Result<Vec<(String, String)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT id, topic FROM watch_subscriptions WHERE is_active = 1 ORDER BY created_at",
         )?;
@@ -1186,7 +1327,10 @@ impl SqliteStore {
     }
 
     pub fn remove_watch_subscription(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         conn.execute(
             "UPDATE watch_subscriptions SET is_active = 0 WHERE id = ?1",
             rusqlite::params![id],
@@ -1195,7 +1339,10 @@ impl SqliteStore {
     }
 
     pub fn get_watch_subscription_active(&self, id: &str) -> Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
         let mut stmt = conn.prepare("SELECT is_active FROM watch_subscriptions WHERE id = ?1")?;
         let result: Option<i64> = stmt
             .query_row(rusqlite::params![id], |row| row.get(0))

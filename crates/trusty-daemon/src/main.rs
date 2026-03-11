@@ -89,8 +89,8 @@ async fn main() -> Result<()> {
         DaemonCmd::Start { foreground } => {
             info!("starting trusty-daemon");
             if !foreground {
-                // TODO: daemonise: write PID file, redirect stdout/stderr to log file
-                todo!("daemonise process (fork, setsid, redirect stdio, write PID)")
+                eprintln!("Direct daemonization is not supported. Use --foreground flag or the provided start scripts.");
+                eprintln!("Example: nohup ./target/release/trusty-daemon start --foreground >> /tmp/trusty-daemon.log 2>&1 &");
             }
             run_daemon(config).await?;
         }

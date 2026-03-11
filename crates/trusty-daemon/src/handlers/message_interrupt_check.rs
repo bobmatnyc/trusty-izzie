@@ -177,7 +177,7 @@ async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
         .ok()
         .flatten()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(189791);
+        .unwrap_or(0);
 
     let wa_cursor: i64 = store
         .sqlite
@@ -185,7 +185,7 @@ async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
         .ok()
         .flatten()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(25650);
+        .unwrap_or(0);
 
     // --- Read new iMessages (received only, is_from_me = 0) ---
     let imsg_db = format!("{home}/Library/Messages/chat.db");
