@@ -201,7 +201,7 @@ impl EventHandler for WhatsAppSyncHandler {
             let context = format!(
                 "WhatsApp to {}: {}",
                 msg.partner,
-                &text[..text.len().min(200)]
+                text.chars().take(200).collect::<String>()
             );
 
             let entity = Entity {

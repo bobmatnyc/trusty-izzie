@@ -146,7 +146,10 @@ impl EventHandler for MessagesSyncHandler {
 
             let normalized = handle.to_lowercase();
             let entity_uuid = Uuid::parse_str(&entity_id).unwrap_or_else(|_| Uuid::new_v4());
-            let context = format!("iMessage to {handle}: {}", &text[..text.len().min(200)]);
+            let context = format!(
+                "iMessage to {handle}: {}",
+                text.chars().take(200).collect::<String>()
+            );
 
             let entity = Entity {
                 id: entity_uuid,

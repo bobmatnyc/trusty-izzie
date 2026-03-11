@@ -1268,7 +1268,8 @@ impl ChatEngine {
                         }
                     }
                     if !notes.is_empty() {
-                        line.push_str(&format!(" — {}", &notes[..notes.len().min(80)]));
+                        let notes_preview: String = notes.chars().take(80).collect();
+                        line.push_str(&format!(" — {}", &notes_preview));
                     }
                     lines.push(line);
                 }
@@ -1353,7 +1354,8 @@ impl ChatEngine {
                     }
                 }
                 if !notes.is_empty() {
-                    line.push_str(&format!(" — {}", &notes[..notes.len().min(80)]));
+                    let notes_preview: String = notes.chars().take(80).collect();
+                    line.push_str(&format!(" — {}", &notes_preview));
                 }
                 lines.push(line);
             }
@@ -1803,7 +1805,7 @@ impl ChatEngine {
                         .unwrap_or_else(|e| format!("Error: {e}")),
                     Err(_) => format!("Unknown tool: {}", tc.name),
                 };
-                tracing::debug!(tool = %tc.name, "tool executed");
+                tracing::info!(tool = %tc.name, "tool executed");
                 results_text.push_str(&format!("Tool `{}` returned:\n{}\n\n", tc.name, result));
             }
 
@@ -1815,7 +1817,7 @@ impl ChatEngine {
             llm_messages.push(OrchatMessage {
                 role: "user".to_string(),
                 content: format!(
-                    "Tool results:\n\n{}Now please provide your final response.",
+                    "Tool results:\n\n{}Now please provide your final response. Remember to respond in the required JSON format with either a `reply` field for text responses or a `toolCalls` array for tool invocations.",
                     results_text
                 ),
             });
@@ -1844,7 +1846,7 @@ impl ChatEngine {
                 session_id: session.id,
                 role: MessageRole::Tool,
                 content: format!(
-                    "Tool results:\n\n{}Now please provide your final response.",
+                    "Tool results:\n\n{}Now please provide your final response. Remember to respond in the required JSON format with either a `reply` field for text responses or a `toolCalls` array for tool invocations.",
                     results_text
                 ),
                 tool_name: None,
@@ -2166,7 +2168,7 @@ fn parse_response(raw: &str) -> StructuredResponse {
     }
 
     // 4. Fallback: treat the whole raw string as a plain-text reply.
-    tracing::warn!("parse_response fallback: treating raw LLM output as plain text reply");
+    tracing::warn!("parse_response fallback: treating raw LLM output as plain text reply. First 200 chars: {:?}", &raw.chars().take(200).collect::<String>());
     StructuredResponse {
         reply: raw.to_string(),
         memories_to_save: vec![],

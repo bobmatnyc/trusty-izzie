@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/api-start.sh — Start the trusty-api REST server in the background.
+# scripts/api-start.sh - Start the trusty-api REST server in the background.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +33,7 @@ if [[ -f "$PROJECT_DIR/.env" ]]; then
 fi
 
 echo "▶ Starting trusty-api on port $PORT…"
+export RUST_BACKTRACE=1
 nohup "$API_BIN" >> "$LOG_FILE" 2>&1 &
 API_PID=$!
 echo "$API_PID" > "$PID_FILE"

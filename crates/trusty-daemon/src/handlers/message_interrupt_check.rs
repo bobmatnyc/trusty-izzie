@@ -370,8 +370,8 @@ async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
         if needs_attention.len() == 1 { "" } else { "s" }
     );
     for (msg, reason) in &needs_attention {
-        let preview = if msg.2.len() > 100 {
-            format!("{}...", &msg.2[..100])
+        let preview = if msg.2.chars().count() > 100 {
+            format!("{}...", msg.2.chars().take(100).collect::<String>())
         } else {
             msg.2.clone()
         };
