@@ -1,0 +1,55 @@
+[package]
+name = "trusty-slack"
+description = "Slack bot interface for trusty-izzie"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "trusty-slack"
+path = "src/main.rs"
+
+[dependencies]
+trusty-models  = { path = "../trusty-models" }
+trusty-core    = { path = "../trusty-core" }
+trusty-store   = { path = "../trusty-store" }
+trusty-chat    = { path = "../trusty-chat" }
+trusty-metro-north = { path = "../trusty-metro-north" }
+trusty-weather     = { path = "../trusty-weather" }
+trusty-skill       = { path = "../trusty-skill" }
+
+# HTTP server / client
+axum         = { workspace = true }
+tower-http   = { workspace = true }
+reqwest      = { workspace = true }
+
+# Async
+tokio        = { workspace = true }
+
+# Serde
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+
+# Error handling / logging
+anyhow       = { workspace = true }
+tracing      = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Config
+dotenvy      = { workspace = true }
+clap         = { workspace = true }
+
+# Crypto — Slack signature verification
+hmac         = { workspace = true }
+sha2         = { workspace = true }
+hex          = { workspace = true }
+
+# Time
+chrono       = { workspace = true }
+
+# Session management
+uuid         = { workspace = true }
+
+# Path expansion
+shellexpand  = "3"

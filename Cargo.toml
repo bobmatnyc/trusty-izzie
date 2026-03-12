@@ -19,6 +19,7 @@ members = [
     "crates/trusty-skill",
     "crates/trusty-metro-north",
     "crates/trusty-weather",
+    "crates/trusty-slack",
     "installer/src-tauri",
 ]
 
@@ -92,6 +93,7 @@ dotenvy = "0.15"
 # Crypto
 aes-gcm = "0.10"
 sha2 = "0.10"
+hmac = "0.12"
 base64 = "0.22"
 hex = "0.4"
 
@@ -104,6 +106,7 @@ async-trait = "0.1"
 once_cell = "1"
 regex = "1"
 strsim = "0.11"
+shellexpand = "3"
 
 # IPC
 interprocess = "2"
