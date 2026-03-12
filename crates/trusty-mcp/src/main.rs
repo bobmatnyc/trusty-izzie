@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
         config.chat.context_entity_limit,
     );
     let agents_dir = expand_tilde(&config.agents.agents_dir);
+    let skills_dir = expand_tilde(&config.agents.skills_dir);
 
     let engine = Arc::new(
         ChatEngine::new_with_context(
@@ -80,7 +81,8 @@ async fn main() -> Result<()> {
             assembler,
         )
         .with_sqlite(Arc::clone(&sqlite))
-        .with_agents_dir(agents_dir),
+        .with_agents_dir(agents_dir)
+        .with_skills_dir(skills_dir.to_string_lossy().into_owned()),
     );
 
     let server = Arc::new(McpServer::new(engine));

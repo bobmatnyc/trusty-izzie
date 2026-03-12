@@ -33,6 +33,8 @@ pub struct ChatEngine {
     sqlite: Option<Arc<SqliteStore>>,
     /// Directory containing agent definition Markdown files.
     agents_dir: PathBuf,
+    /// Directory containing skill Markdown files (injected into system prompt).
+    skills_dir: String,
 }
 
 // ── OpenRouter request/response types ────────────────────────────────────────
@@ -115,6 +117,7 @@ impl ChatEngine {
             context_assembler,
             sqlite: None,
             agents_dir: PathBuf::from("docs/agents"),
+            skills_dir: "docs/skills".to_string(),
         }
     }
 
@@ -127,6 +130,12 @@ impl ChatEngine {
     /// Set the agents directory for agent-related tools.
     pub fn with_agents_dir(mut self, agents_dir: PathBuf) -> Self {
         self.agents_dir = agents_dir;
+        self
+    }
+
+    /// Set the skills directory for skill injection into the system prompt.
+    pub fn with_skills_dir(mut self, skills_dir: String) -> Self {
+        self.skills_dir = skills_dir;
         self
     }
 
@@ -171,6 +180,12 @@ impl ChatEngine {
             ToolName::SearchImessages => self.tool_search_imessages(input),
             ToolName::SearchContacts => self.tool_search_contacts(input),
             ToolName::SearchWhatsapp => self.tool_search_whatsapp(input),
+            ToolName::GetTrainSchedule => trusty_metro_north::get_train_schedule(input)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}")),
+            ToolName::GetTrainAlerts => trusty_metro_north::get_train_alerts(input)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}")),
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -1736,8 +1751,14 @@ impl ChatEngine {
             .as_deref()
             .and_then(|s| s.list_all_prefs().ok())
             .unwrap_or_default();
-        let system_content =
-            system_prompt(now, &context_section, &accounts_context, &current_prefs);
+        let skills_content = crate::skills::load_skills(&self.skills_dir);
+        let system_content = system_prompt(
+            now,
+            &context_section,
+            &accounts_context,
+            &current_prefs,
+            &skills_content,
+        );
 
         // 3. Build the LLM message array from session history.
         let mut llm_messages: Vec<OrchatMessage> = vec![OrchatMessage {
@@ -1970,6 +1991,7 @@ fn system_prompt(
     context: &str,
     accounts_ctx: &str,
     current_prefs: &[(String, String)],
+    skills_content: &str,
 ) -> String {
     let user_email =
         std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
@@ -1993,6 +2015,11 @@ fn system_prompt(
         }
         s
     };
+    let skills_section = if skills_content.is_empty() {
+        String::new()
+    } else {
+        skills_content.to_string()
+    };
     format!(
         r#"You are trusty-izzie, a personal AI assistant with deep knowledge of the user's professional relationships and work context. You run locally on the user's machine.
 
@@ -2004,7 +2031,7 @@ Today is {}. Current time: {}.
 - **Timezone**: America/New_York (EDT, UTC-5)
 - You are their personal assistant. Address them by name when appropriate. When they ask who they are or about themselves, use this information.
 - **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, or local contacts.
-{context_section}{accounts_section}{prefs_section}
+{context_section}{accounts_section}{prefs_section}{skills_section}
 
 ## My Deployment
 
@@ -2291,7 +2318,7 @@ mod tests {
     #[test]
     fn test_system_prompt_contains_date() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "", "", &[]);
+        let prompt = system_prompt(now, "", "", &[], "");
         let year = now.format("%Y").to_string();
         assert!(prompt.contains(&year));
     }
@@ -2304,6 +2331,7 @@ mod tests {
             "## Relevant People & Projects\n- Alice (Person): alice",
             "",
             &[],
+            "",
         );
         assert!(prompt.contains("## Relevant People & Projects"));
     }
@@ -2311,7 +2339,7 @@ mod tests {
     #[test]
     fn test_system_prompt_no_context_section_when_empty() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "", "", &[]);
+        let prompt = system_prompt(now, "", "", &[], "");
         assert!(!prompt.contains("## Relevant"));
     }
 

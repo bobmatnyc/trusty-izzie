@@ -188,6 +188,31 @@ pub fn all_tools() -> Vec<Tool> {
             description: "Get the user's Izzie preferences (proactive features, notification settings)",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
+        Tool {
+            name: "get_train_schedule",
+            description: "Fetch upcoming Metro North Railroad train departures between two stations using real-time MTA data",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "from_station": { "type": "string", "description": "Origin station name (e.g. \"Grand Central\", \"Stamford\", \"Greenwich\")" },
+                    "to_station": { "type": "string", "description": "Destination station name" },
+                    "count": { "type": "integer", "default": 5, "minimum": 1, "maximum": 20,
+                               "description": "Number of upcoming trains to return" }
+                },
+                "required": ["from_station", "to_station"]
+            }),
+        },
+        Tool {
+            name: "get_train_alerts",
+            description: "Fetch current Metro North Railroad service alerts and delays",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "line": { "type": "string",
+                              "description": "Optional line filter: New Haven, Harlem, Hudson, Pascack Valley, Port Jervis, New Canaan, Danbury, Waterbury" }
+                }
+            }),
+        },
     ]
 }
 
@@ -255,6 +280,16 @@ pub async fn dispatch(engine: &ChatEngine, name: &str, arguments: &Value) -> Res
         "get_preferences" => {
             engine
                 .execute_tool(&ToolName::GetPreferences, arguments)
+                .await
+        }
+        "get_train_schedule" => {
+            engine
+                .execute_tool(&ToolName::GetTrainSchedule, arguments)
+                .await
+        }
+        "get_train_alerts" => {
+            engine
+                .execute_tool(&ToolName::GetTrainAlerts, arguments)
                 .await
         }
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),

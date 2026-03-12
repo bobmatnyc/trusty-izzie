@@ -1791,7 +1791,8 @@ async fn main() -> Result<()> {
                     assembler,
                 )
                 .with_sqlite(Arc::clone(&store.sqlite))
-                .with_agents_dir(data_dir.join("agents")),
+                .with_agents_dir(data_dir.join("agents"))
+                .with_skills_dir(config.agents.skills_dir.clone()),
             );
 
             // Seed the primary account (idempotent).

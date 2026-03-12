@@ -95,6 +95,10 @@ pub enum ToolName {
     CreateCalendarEvent,
     /// Mark a Google Task as complete.
     CompleteTask,
+    /// Fetch upcoming Metro North train departures between two stations.
+    GetTrainSchedule,
+    /// Fetch current Metro North service alerts.
+    GetTrainAlerts,
 }
 
 /// A parsed tool call request from the LLM.

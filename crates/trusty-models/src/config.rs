@@ -102,16 +102,24 @@ pub struct AgentsConfig {
     /// Directory containing agent definition Markdown files.
     #[serde(default = "default_agents_dir")]
     pub agents_dir: String,
+    /// Directory containing skill Markdown files.
+    #[serde(default = "default_skills_dir")]
+    pub skills_dir: String,
 }
 
 fn default_agents_dir() -> String {
     "docs/agents".to_string()
 }
 
+fn default_skills_dir() -> String {
+    "docs/skills".to_string()
+}
+
 impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
             agents_dir: default_agents_dir(),
+            skills_dir: default_skills_dir(),
         }
     }
 }

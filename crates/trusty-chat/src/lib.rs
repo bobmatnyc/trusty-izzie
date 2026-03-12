@@ -6,6 +6,7 @@
 pub mod context;
 pub mod engine;
 pub mod session;
+pub mod skills;
 pub mod tools;
 
 pub use context::ContextAssembler;
