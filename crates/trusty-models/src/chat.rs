@@ -104,8 +104,50 @@ pub struct MemoryToSave {
     #[serde(default)]
     pub related_entities: Vec<String>,
     /// Importance weight in `[0.0, 1.0]`.
-    #[serde(default)]
+    #[serde(
+        default = "default_importance",
+        deserialize_with = "deserialize_importance"
+    )]
     pub importance: f32,
+}
+
+fn default_importance() -> f32 {
+    0.5
+}
+
+fn deserialize_importance<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = f32;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a float, integer, or importance string")
+        }
+        fn visit_f64<E>(self, v: f64) -> Result<f32, E> {
+            Ok(v as f32)
+        }
+        fn visit_i64<E>(self, v: i64) -> Result<f32, E> {
+            Ok((v as f32).clamp(0.0, 1.0))
+        }
+        fn visit_u64<E>(self, v: u64) -> Result<f32, E> {
+            Ok((v as f32).clamp(0.0, 1.0))
+        }
+        fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<f32, E> {
+            Ok(match s.to_lowercase().as_str() {
+                "low" | "minor" => 0.2,
+                "medium" | "normal" | "moderate" => 0.5,
+                "high" | "important" => 0.8,
+                "critical" | "very high" | "urgent" => 1.0,
+                other => other.parse::<f32>().unwrap_or(0.5).clamp(0.0, 1.0),
+            })
+        }
+        fn visit_none<E>(self) -> Result<f32, E> {
+            Ok(0.5)
+        }
+        fn visit_unit<E>(self) -> Result<f32, E> {
+            Ok(0.5)
+        }
+    }
+    d.deserialize_any(V)
 }
 
 /// Context bundle assembled for each chat completion call.

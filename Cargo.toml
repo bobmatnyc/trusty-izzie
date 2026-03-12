@@ -16,6 +16,7 @@ members = [
     "crates/trusty-telegram",
     "crates/trusty-migrate",
     "crates/trusty-mcp",
+    "crates/trusty-skill",
     "crates/trusty-metro-north",
     "crates/trusty-weather",
     "installer/src-tauri",

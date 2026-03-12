@@ -2451,11 +2451,17 @@ fn parse_response(raw: &str) -> StructuredResponse {
     }
 
     // 3. Try to find any valid JSON object starting with '{' that has a "reply" field.
+    let mut first_json_err: Option<serde_json::Error> = None;
     let mut search = raw;
     while let Some(start) = search.find('{') {
         let candidate = &search[start..];
-        if let Ok(s) = serde_json::from_str::<StructuredResponse>(candidate) {
-            return s;
+        match serde_json::from_str::<StructuredResponse>(candidate) {
+            Ok(s) => return s,
+            Err(e) => {
+                if first_json_err.is_none() {
+                    first_json_err = Some(e);
+                }
+            }
         }
         search = &search[start + 1..];
     }
@@ -2463,7 +2469,8 @@ fn parse_response(raw: &str) -> StructuredResponse {
     // 4. Fallback: treat the whole raw string as a plain-text reply.
     if raw.trim_start().starts_with('{') {
         tracing::warn!(
-            "parse_response: JSON found but failed to deserialize. First 200 chars: {:?}",
+            "parse_response: JSON found but failed to deserialize: {}. First 200 chars: {:?}",
+            first_json_err.map(|e| e.to_string()).unwrap_or_default(),
             &raw.chars().take(200).collect::<String>()
         );
     } else {

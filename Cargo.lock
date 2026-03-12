@@ -10325,6 +10325,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "trusty-skill"
+version = "0.1.7"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "trusty-store"
 version = "0.1.7"
 dependencies = [
