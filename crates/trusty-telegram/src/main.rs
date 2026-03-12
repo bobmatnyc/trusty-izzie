@@ -1546,15 +1546,32 @@ async fn run_webhook(
             .expect("invalid governor config"),
     );
 
-    let app = Router::new()
+    // ── Slack webhook (optional) ────────────────────────────────────────
+    // When SLACK_BOT_TOKEN + SLACK_SIGNING_SECRET are set, mount /slack/events
+    // on this same port so the existing ngrok tunnel handles both Telegram
+    // and Slack webhooks — no second tunnel needed.
+    let slack_router: Option<axum::Router> =
+        trusty_slack::slack_state_from_env(Arc::clone(&state.engine), Arc::clone(&state.store))
+            .map(|ss| {
+                tracing::info!("Slack webhook mounted at /slack/events");
+                trusty_slack::build_slack_router(ss)
+            });
+
+    // Build main router and finalize its state → Router<()>
+    let main_app = Router::new()
         .route("/health", get(health_handler))
         .route("/chat", post(chat_handler))
         .route("/webhook/telegram", post(webhook_handler))
         .route("/api/auth/google/callback", get(oauth_callback_handler))
-        .layer(tower_governor::GovernorLayer {
-            config: governor_conf,
-        })
         .with_state(state);
+
+    // Merge Slack sub-router (also Router<()>) then apply shared layers
+    let app =
+        main_app
+            .merge(slack_router.unwrap_or_default())
+            .layer(tower_governor::GovernorLayer {
+                config: governor_conf,
+            });
 
     let addr = format!("0.0.0.0:{port}");
     info!("Webhook server listening on {addr}");

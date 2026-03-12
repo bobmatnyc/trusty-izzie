@@ -40,6 +40,7 @@ pub struct PendingDraft {
 }
 
 /// Shared proxy state.
+#[derive(Default)]
 pub struct ProxyState {
     /// dm_thread_ts → pending draft
     pub pending: Mutex<HashMap<String, PendingDraft>>,

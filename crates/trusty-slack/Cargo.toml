@@ -53,3 +53,7 @@ uuid         = { workspace = true }
 
 # Path expansion
 shellexpand  = "3"
+
+[lib]
+name = "trusty_slack"
+path = "src/lib.rs"

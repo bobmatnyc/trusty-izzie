@@ -32,3 +32,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+
+# Slack webhook support (optional — only active when SLACK_BOT_TOKEN is set)
+hmac         = { workspace = true }
+sha2         = { workspace = true }
+hex          = { workspace = true }
+trusty-slack = { path = "../trusty-slack" }
+trusty-metro-north = { path = "../trusty-metro-north" }
+trusty-weather     = { path = "../trusty-weather" }
+trusty-skill       = { path = "../trusty-skill" }
+shellexpand  = "3"
+dotenvy     = { workspace = true }
