@@ -1757,12 +1757,18 @@ impl ChatEngine {
             .and_then(|s| s.list_all_prefs().ok())
             .unwrap_or_default();
         let skills_content = crate::skills::load_skills(&self.skills_dir);
+        let user_location = self
+            .sqlite
+            .as_deref()
+            .and_then(|s| s.get_config("user_current_location").ok().flatten())
+            .unwrap_or_default();
         let system_content = system_prompt(
             now,
             &context_section,
             &accounts_context,
             &current_prefs,
             &skills_content,
+            &user_location,
         );
 
         // 3. Build the LLM message array from session history.
@@ -1997,6 +2003,7 @@ fn system_prompt(
     accounts_ctx: &str,
     current_prefs: &[(String, String)],
     skills_content: &str,
+    user_location: &str,
 ) -> String {
     let user_email =
         std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
@@ -2033,9 +2040,10 @@ Today is {}. Current time: {}.
 ## About Your User
 - **Name**: {user_name}
 - **Email**: {user_email}
-- **Timezone**: America/New_York (EDT, UTC-5)
+- **Timezone**: America/New_York (home base — may be travelling, see location below)
 - You are their personal assistant. Address them by name when appropriate. When they ask who they are or about themselves, use this information.
-- **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, or local contacts.
+- **Current location**: {user_location_line}
+- **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, local time, or train schedules.
 {context_section}{accounts_section}{prefs_section}{skills_section}
 
 ## My Deployment
@@ -2203,9 +2211,17 @@ Required format (output this and nothing else):
 IMPORTANT: The "reply" field must ALWAYS be non-empty in your final response (when `toolCalls` is empty). Even for declarative statements, acknowledge receipt — e.g. "Got it, noted!" Never leave "reply" empty in a final response.
 
 Be helpful, concise, and honest. Only include items in memoriesToSave if you learned something genuinely new and useful. Be selective — 0-1 memories per turn is typical."#,
-        now.format("%A, %B %d, %Y"),
-        now.format("%H:%M UTC"),
+        now.with_timezone(&chrono::Local).format("%A, %B %d, %Y"),
+        {
+            let local = now.with_timezone(&chrono::Local);
+            format!("{} ({})", local.format("%H:%M"), local.format("%Z %:z"))
+        },
         env!("CARGO_PKG_VERSION"),
+        user_location_line = if user_location.is_empty() {
+            "Hastings-on-Hudson, NY (home — no recent location update)".to_string()
+        } else {
+            user_location.to_string()
+        },
     )
 }
 
@@ -2329,7 +2345,7 @@ mod tests {
     #[test]
     fn test_system_prompt_contains_date() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "", "", &[], "");
+        let prompt = system_prompt(now, "", "", &[], "", "");
         let year = now.format("%Y").to_string();
         assert!(prompt.contains(&year));
     }
@@ -2343,6 +2359,7 @@ mod tests {
             "",
             &[],
             "",
+            "",
         );
         assert!(prompt.contains("## Relevant People & Projects"));
     }
@@ -2350,7 +2367,7 @@ mod tests {
     #[test]
     fn test_system_prompt_no_context_section_when_empty() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "", "", &[], "");
+        let prompt = system_prompt(now, "", "", &[], "", "");
         assert!(!prompt.contains("## Relevant"));
     }
 

@@ -971,7 +971,7 @@ async fn webhook_handler(
                 .save(
                     &user_id_loc,
                     &memory_content,
-                    trusty_models::memory::MemoryCategory::General,
+                    trusty_models::memory::MemoryCategory::Location,
                     vec![],
                     0.9,
                     None,
