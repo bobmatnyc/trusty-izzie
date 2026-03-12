@@ -424,6 +424,7 @@ impl ChatEngine {
             EventType::MessageInterruptCheck => EventPayload::MessageInterruptCheck {},
             EventType::TrainDelayCheck => EventPayload::TrainDelayCheck {},
             EventType::WeatherCheck => EventPayload::WeatherCheck {},
+            EventType::StyleTraining => EventPayload::StyleTraining {},
         };
 
         let id = self.sqlite_ref()?.enqueue_event(
@@ -2154,6 +2155,16 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
             .as_deref()
             .and_then(|s| s.get_config("user_current_location").ok().flatten())
             .unwrap_or_default();
+        let communication_style = self
+            .sqlite
+            .as_deref()
+            .and_then(|s| {
+                s.get_config("communication_style_work")
+                    .ok()
+                    .flatten()
+                    .or_else(|| s.get_config("communication_style_personal").ok().flatten())
+            })
+            .unwrap_or_default();
         let system_content = system_prompt(
             now,
             &context_section,
@@ -2161,6 +2172,7 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
             &current_prefs,
             &skills_content,
             &user_location,
+            &communication_style,
         );
 
         // 3. Build the LLM message array from session history.
@@ -2391,6 +2403,7 @@ fn system_prompt(
     current_prefs: &[(String, String)],
     skills_content: &str,
     user_location: &str,
+    communication_style: &str,
 ) -> String {
     let user_email =
         std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
@@ -2419,6 +2432,24 @@ fn system_prompt(
     } else {
         skills_content.to_string()
     };
+    let style_section = if communication_style.is_empty() {
+        String::new()
+    } else {
+        let style: serde_json::Value =
+            serde_json::from_str(communication_style).unwrap_or_default();
+        let summary = style["summary"].as_str().unwrap_or("");
+        let template = style["notification_template"].as_str().unwrap_or("");
+        let formality = style["formality"].as_str().unwrap_or("");
+        if summary.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n- **Writing style**: {summary}\n\
+                 - **Formality**: {formality}\n\
+                 - **Notification template**: {template}"
+            )
+        }
+    };
     format!(
         r#"You are trusty-izzie, a personal AI assistant with deep knowledge of the user's professional relationships and work context. You run locally on the user's machine.
 
@@ -2430,7 +2461,7 @@ Today is {}. Current time: {}.
 - **Timezone**: America/New_York (home base — may be travelling, see location below)
 - You are their personal assistant. Address them by name when appropriate. When they ask who they are or about themselves, use this information.
 - **Current location**: {user_location_line}
-- **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, local time, or train schedules.
+- **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, local time, or train schedules.{style_section}
 {context_section}{accounts_section}{prefs_section}{skills_section}
 
 ## My Deployment
@@ -2760,7 +2791,7 @@ mod tests {
     #[test]
     fn test_system_prompt_contains_date() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "", "", &[], "", "");
+        let prompt = system_prompt(now, "", "", &[], "", "", "");
         let year = now.format("%Y").to_string();
         assert!(prompt.contains(&year));
     }
@@ -2775,6 +2806,7 @@ mod tests {
             &[],
             "",
             "",
+            "",
         );
         assert!(prompt.contains("## Relevant People & Projects"));
     }
@@ -2782,7 +2814,7 @@ mod tests {
     #[test]
     fn test_system_prompt_no_context_section_when_empty() {
         let now = chrono::Utc::now();
-        let prompt = system_prompt(now, "", "", &[], "", "");
+        let prompt = system_prompt(now, "", "", &[], "", "", "");
         assert!(!prompt.contains("## Relevant"));
     }
 

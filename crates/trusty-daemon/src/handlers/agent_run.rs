@@ -109,6 +109,22 @@ fn agent_tool_definitions() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "tavily_search",
+                "description": "Deep web search optimized for research agents. Returns full page content, not just snippets. Prefer this over web_search for research tasks requiring detailed information.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Research query" },
+                        "search_depth": { "type": "string", "enum": ["basic", "advanced"], "default": "basic" },
+                        "max_results": { "type": "integer", "default": 5 }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_memories",
                 "description": "Search the user's stored memories and personal context by semantic query.",
                 "parameters": {
@@ -168,6 +184,56 @@ async fn execute_agent_tool(name: &str, args: &serde_json::Value, _store: &Arc<S
                             "No results found.".into()
                         } else {
                             results
+                        }
+                    }
+                    Err(e) => format!("Parse error: {e}"),
+                },
+                Err(e) => format!("Request error: {e}"),
+            }
+        }
+        "tavily_search" => {
+            let query = args["query"].as_str().unwrap_or("");
+            let depth = args["search_depth"].as_str().unwrap_or("basic");
+            let max_results = args["max_results"].as_u64().unwrap_or(5);
+            let api_key = match std::env::var("TAVILY_API_KEY") {
+                Ok(k) => k,
+                Err(_) => return "Error: TAVILY_API_KEY not configured".into(),
+            };
+            let client = reqwest::Client::new();
+            match client
+                .post("https://api.tavily.com/search")
+                .header("Content-Type", "application/json")
+                .json(&serde_json::json!({
+                    "api_key": api_key,
+                    "query": query,
+                    "search_depth": depth,
+                    "max_results": max_results,
+                    "include_answer": true,
+                    "include_raw_content": false
+                }))
+                .send()
+                .await
+            {
+                Ok(resp) => match resp.json::<serde_json::Value>().await {
+                    Ok(json) => {
+                        let mut parts = vec![];
+                        if let Some(answer) = json["answer"].as_str() {
+                            if !answer.is_empty() {
+                                parts.push(format!("**Summary**: {answer}"));
+                            }
+                        }
+                        if let Some(results) = json["results"].as_array() {
+                            for r in results {
+                                let title = r["title"].as_str().unwrap_or("");
+                                let content = r["content"].as_str().unwrap_or("");
+                                let url = r["url"].as_str().unwrap_or("");
+                                parts.push(format!("**{title}**\n{content}\n{url}"));
+                            }
+                        }
+                        if parts.is_empty() {
+                            "No results.".into()
+                        } else {
+                            parts.join("\n\n")
                         }
                     }
                     Err(e) => format!("Parse error: {e}"),
