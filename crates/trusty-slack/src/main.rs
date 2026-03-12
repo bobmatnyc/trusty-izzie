@@ -122,10 +122,13 @@ async fn main() -> Result<()> {
     // Proxy mode state — pending approval drafts
     let proxy = Arc::new(ProxyState::new());
 
+    let user_token = std::env::var("SLACK_USER_TOKEN").ok();
+
     let state = Arc::new(SlackState {
         engine,
         store,
         bot_token,
+        user_token,
         signing_secret,
         sessions,
         proxy,

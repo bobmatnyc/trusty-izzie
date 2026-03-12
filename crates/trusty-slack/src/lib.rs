@@ -43,10 +43,13 @@ pub fn slack_state_from_env(
     let bot_token = std::env::var("SLACK_BOT_TOKEN").ok()?;
     let signing_secret = std::env::var("SLACK_SIGNING_SECRET").ok()?;
 
+    let user_token = std::env::var("SLACK_USER_TOKEN").ok();
+
     Some(Arc::new(SlackState {
         engine,
         store,
         bot_token,
+        user_token,
         signing_secret,
         sessions: Arc::new(Mutex::new(HashMap::<String, ChatSession>::new())),
         proxy: Arc::new(proxy::ProxyState::new()),

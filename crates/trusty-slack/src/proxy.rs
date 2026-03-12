@@ -177,6 +177,7 @@ pub async fn send_draft_for_approval(
 /// not also handle it as a regular chat message).
 pub async fn handle_possible_approval(
     bot_token: &str,
+    user_token: Option<&str>,
     proxy_state: &ProxyState,
     _dm_channel: &str,
     user_text: &str,
@@ -214,8 +215,11 @@ pub async fn handle_possible_approval(
         draft_info.original_channel, draft_info.original_thread_ts
     );
 
+    // Use user token if available so the message appears to come from the user,
+    // not from the bot. Falls back to bot token if user token not configured.
+    let posting_token = user_token.unwrap_or(bot_token);
     if let Err(e) = api::post_message(
-        bot_token,
+        posting_token,
         &draft_info.original_channel,
         Some(&draft_info.original_thread_ts),
         &text_to_send,

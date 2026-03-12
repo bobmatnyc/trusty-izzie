@@ -45,6 +45,9 @@ pub struct SlackState {
     pub engine: Arc<ChatEngine>,
     pub store: Arc<Store>,
     pub bot_token: String,
+    /// Optional user token (xoxp-...) — when set, approved proxy posts are sent
+    /// as the user rather than as the bot.
+    pub user_token: Option<String>,
     pub signing_secret: String,
     /// Per-thread conversation sessions ("slack:channel:thread_ts" → ChatSession).
     pub sessions: Arc<Mutex<HashMap<String, ChatSession>>>,
@@ -126,6 +129,7 @@ async fn dispatch_event(state: Arc<SlackState>, callback: EventCallback) {
                 if !user_text.is_empty() {
                     let handled = proxy::handle_possible_approval(
                         &state.bot_token,
+                        state.user_token.as_deref(),
                         &state.proxy,
                         &msg.channel,
                         &user_text,
