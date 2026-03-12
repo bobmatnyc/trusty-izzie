@@ -108,6 +108,8 @@ pub enum ToolName {
     GetWeather,
     /// Get active NWS severe weather alerts for a location (US only).
     GetWeatherAlerts,
+    /// Design and build a new skill using Opus (design) and Sonnet (implementation).
+    CreateSkill,
 }
 
 /// A parsed tool call request from the LLM.

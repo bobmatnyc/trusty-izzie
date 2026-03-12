@@ -170,6 +170,14 @@ impl ChatEngine {
                 return result;
             }
         }
+        // 3. Try per-turn script skills (hot-reloaded — picks up create_skill output).
+        let script_skills =
+            trusty_skill::load_script_skills(std::path::Path::new(&self.skills_dir));
+        for skill in &script_skills {
+            if let Some(result) = skill.execute(&call).await {
+                return result;
+            }
+        }
         Err(anyhow::anyhow!("Unknown tool: {name}"))
     }
 
@@ -232,6 +240,7 @@ impl ChatEngine {
             ToolName::GetWeatherAlerts => trusty_weather::get_weather_alerts(input)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}")),
+            ToolName::CreateSkill => self.tool_create_skill(input).await,
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -1882,6 +1891,159 @@ impl ChatEngine {
         Ok(format!("Open loop '{}' dismissed.", id))
     }
 
+    // ── Skill builder ─────────────────────────────────────────────────────────
+
+    /// Make a single LLM completion call (no tools, no session).
+    /// Used internally for sub-tasks like skill design and code generation.
+    async fn llm_sub_call(&self, model: &str, system: &str, user: &str) -> anyhow::Result<String> {
+        let url = format!("{}/chat/completions", self.api_base);
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user}
+            ]
+        });
+        let resp: serde_json::Value = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .header("HTTP-Referer", "https://trusty-izzie")
+            .header("X-Title", "trusty-izzie skill builder")
+            .json(&body)
+            .send()
+            .await
+            .context("skill builder LLM request failed")?
+            .json()
+            .await
+            .context("failed to parse skill builder LLM response")?;
+        let content = resp["choices"][0]["message"]["content"]
+            .as_str()
+            .context("no content in skill builder response")?
+            .to_string();
+        Ok(content)
+    }
+
+    async fn tool_create_skill(&self, input: &serde_json::Value) -> Result<String> {
+        let name = input["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: name"))?
+            .to_lowercase()
+            .replace(' ', "-");
+        let description = input["description"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: description"))?;
+
+        tracing::info!(skill = %name, "create_skill: designing with Opus");
+
+        // ── Step 1: Opus designs the skill spec ──────────────────────────────
+        let design_system = r#"You are a skill architect for a personal AI assistant called Izzie.
+Design a skill specification in YAML frontmatter format for a new skill.
+
+The frontmatter MUST follow this exact schema:
+---
+name: <kebab-case-name>
+version: "1.0"
+description: "<one sentence>"
+execute:
+  runtime: python3
+  command: scripts/skills/<name>.py
+  arg_format: json-stdin
+tools:
+  - name: <tool_name>
+    description: "<what it does>"
+    parameters:
+      type: object
+      properties:
+        <param>: { type: string, description: "<desc>" }
+      required: [<param>]
+examples:
+  - user: "<example user message>"
+    tool: <tool_name>
+    args: { <param>: "<value>" }
+---
+
+After the frontmatter, write 2-3 paragraphs of markdown explaining:
+- When to use this skill
+- What data sources or APIs it uses
+- Any important limitations or usage notes
+
+Output ONLY the complete .md file content (frontmatter + markdown body). No preamble."#;
+
+        let design_user =
+            format!("Design a skill named '{name}' that does the following:\n\n{description}");
+
+        let skill_md = self
+            .llm_sub_call("anthropic/claude-opus-4-5", design_system, &design_user)
+            .await?;
+
+        // ── Step 2: Sonnet writes the Python implementation ───────────────────
+        tracing::info!(skill = %name, "create_skill: implementing with Sonnet");
+
+        let impl_system = r#"You are a Python developer writing a skill script for a personal AI assistant.
+
+The script will be called via subprocess with tool arguments as JSON on stdin.
+Read JSON from stdin, execute the requested tool, print result to stdout, exit 0.
+On error, print error message to stdout (not stderr) and exit 0.
+
+Requirements:
+- Read JSON from stdin: `import json, sys; args = json.load(sys.stdin)`
+- The JSON has: {"name": "<tool_name>", "arguments": {<tool_args>}}
+- Dispatch on args["name"] to call the right function
+- Print plain text result to stdout
+- Use only stdlib + requests (no other deps assumed)
+- Handle errors gracefully — never crash with an uncaught exception
+- Keep it simple and readable
+
+Output ONLY the Python code, no markdown fences, no explanation."#;
+
+        let impl_user = format!("Write the Python implementation for this skill:\n\n{skill_md}");
+
+        let python_code = self
+            .llm_sub_call("anthropic/claude-sonnet-4-5", impl_system, &impl_user)
+            .await?;
+
+        // ── Step 3: Write files ───────────────────────────────────────────────
+        let skills_dir = std::path::Path::new(&self.skills_dir);
+        let scripts_dir = std::path::Path::new("scripts").join("skills");
+
+        std::fs::create_dir_all(&scripts_dir)
+            .context("failed to create scripts/skills directory")?;
+
+        let md_path = skills_dir.join(format!("{name}.md"));
+        std::fs::write(&md_path, &skill_md)
+            .with_context(|| format!("failed to write {}", md_path.display()))?;
+
+        let py_path = scripts_dir.join(format!("{name}.py"));
+        std::fs::write(&py_path, &python_code)
+            .with_context(|| format!("failed to write {}", py_path.display()))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&py_path)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&py_path, perms)?;
+        }
+
+        tracing::info!(
+            skill = %name,
+            md = %md_path.display(),
+            py = %py_path.display(),
+            "create_skill: complete"
+        );
+
+        Ok(format!(
+            "Skill '{name}' created successfully!\n\
+             - Spec: {}\n\
+             - Script: {}\n\
+             The skill will be available on your next message.",
+            md_path.display(),
+            py_path.display()
+        ))
+    }
+
     async fn tool_execute_shell_command(&self, input: &serde_json::Value) -> Result<String> {
         let command = input["command"].as_str().unwrap_or("").trim();
         if command.is_empty() {
@@ -1969,6 +2131,17 @@ impl ChatEngine {
             .unwrap_or_default();
         let mut skills_content = crate::skills::load_skills(&self.skills_dir);
         for skill in &self.skills {
+            if let Some(contribution) = skill.system_prompt_contribution() {
+                if !skills_content.is_empty() {
+                    skills_content.push_str("\n\n");
+                }
+                skills_content.push_str(&contribution);
+            }
+        }
+        // Hot-reload script skills each turn so create_skill takes effect immediately.
+        let script_skills =
+            trusty_skill::load_script_skills(std::path::Path::new(&self.skills_dir));
+        for skill in &script_skills {
             if let Some(contribution) = skill.system_prompt_contribution() {
                 if !skills_content.is_empty() {
                     skills_content.push_str("\n\n");
@@ -2271,6 +2444,7 @@ I can check my own service status with `check_service_status`, report my version
 
 ## What I Can Do
 - **Skills discovery**: Use `search_skills` when unsure whether a capability exists — e.g. search "train" to find commute tools, "calendar" for scheduling tools.
+- **Skill creation**: Use `create_skill` to build a brand-new skill from scratch. Opus designs the spec; Sonnet writes the Python implementation. The skill is live on your next message.
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
 - **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
@@ -2314,6 +2488,7 @@ I can check my own service status with `check_service_status`, report my version
 - `search_skills`: Discover available skills by keyword. Required: query (string). Returns matching skill names, descriptions, and tool names. Use when unsure if a capability exists.
 - `web_search`: Search the web using Brave Search. Required: query (string). Optional: count (default 5, max 10). Returns titles, descriptions, and URLs of top results.
 - `fetch_page`: Fetch and read the text content of a URL. Required: url (string). Optional: max_chars (default 3000, max 8000). Use after web_search to get full article/review content.
+- `create_skill`: Design and build a new skill. Uses Opus to architect the skill spec and Sonnet to write the Python implementation. Required: name (kebab-case, e.g. "hacker-news"), description (plain English — what it fetches, which APIs, etc.). The skill is available on the next turn.
 
 ## Proactive Features
 I proactively send you briefings and updates. You can customize these:
