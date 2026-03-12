@@ -40,8 +40,10 @@ use trusty_email::auth::{generate_pkce_pair, GoogleAuthClient};
 use trusty_embeddings::{Embedder, EmbeddingModel};
 use trusty_extractor::{EntityExtractor, ExtractorConfig, UserContext};
 use trusty_memory::{MemoryRecaller, MemoryStore};
+use trusty_metro_north::MetroNorthSkill;
 use trusty_store::sqlite::SqliteStore;
 use trusty_store::Store;
+use trusty_weather::WeatherSkill;
 
 use er_persist::persist_extraction_result;
 use gdrive::spawn_drive_enrichment;
@@ -1792,7 +1794,11 @@ async fn main() -> Result<()> {
                 )
                 .with_sqlite(Arc::clone(&store.sqlite))
                 .with_agents_dir(data_dir.join("agents"))
-                .with_skills_dir(config.agents.skills_dir.clone()),
+                .with_skills_dir(config.agents.skills_dir.clone())
+                .with_skills(vec![
+                    std::sync::Arc::new(MetroNorthSkill),
+                    std::sync::Arc::new(WeatherSkill),
+                ]),
             );
 
             // Seed the primary account (idempotent).

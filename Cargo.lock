@@ -10398,8 +10398,11 @@ dependencies = [
  "trusty-embeddings",
  "trusty-extractor",
  "trusty-memory",
+ "trusty-metro-north",
  "trusty-models",
+ "trusty-skill",
  "trusty-store",
+ "trusty-weather",
  "uuid",
 ]
 
