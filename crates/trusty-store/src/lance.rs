@@ -503,6 +503,7 @@ fn memory_category_str(c: &MemoryCategory) -> &'static str {
         MemoryCategory::RecurringEvent => "recurring_event",
         MemoryCategory::Decision => "decision",
         MemoryCategory::Event => "event",
+        MemoryCategory::Reminder => "reminder",
         MemoryCategory::General => "general",
     }
 }
@@ -516,6 +517,7 @@ fn memory_category_from_str(s: &str) -> MemoryCategory {
         "recurring_event" => MemoryCategory::RecurringEvent,
         "decision" => MemoryCategory::Decision,
         "event" => MemoryCategory::Event,
+        "reminder" => MemoryCategory::Reminder,
         _ => MemoryCategory::General,
     }
 }

@@ -22,6 +22,8 @@ pub enum MemoryCategory {
     Decision,
     /// A notable event that occurred.
     Event,
+    /// A time-based reminder or follow-up the user wants tracked.
+    Reminder,
     /// Any other memory that does not fit above categories.
     General,
 }
@@ -39,6 +41,7 @@ impl MemoryCategory {
             MemoryCategory::RecurringEvent => 30.0,
             MemoryCategory::Decision => 120.0,
             MemoryCategory::Event => 60.0,
+            MemoryCategory::Reminder => 14.0,
             MemoryCategory::General => 90.0,
         }
     }

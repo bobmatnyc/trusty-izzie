@@ -309,6 +309,7 @@ fn memory_category_label(c: &MemoryCategory) -> &'static str {
         MemoryCategory::RecurringEvent => "recurring_event",
         MemoryCategory::Decision => "decision",
         MemoryCategory::Event => "event",
+        MemoryCategory::Reminder => "reminder",
         MemoryCategory::General => "general",
     }
 }

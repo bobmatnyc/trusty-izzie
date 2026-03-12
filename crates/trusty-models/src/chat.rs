@@ -101,8 +101,10 @@ pub struct MemoryToSave {
     /// Human-readable content of the memory.
     pub content: String,
     /// Normalised entity values this memory relates to.
+    #[serde(default)]
     pub related_entities: Vec<String>,
     /// Importance weight in `[0.0, 1.0]`.
+    #[serde(default)]
     pub importance: f32,
 }
 
