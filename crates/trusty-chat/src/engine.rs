@@ -191,6 +191,7 @@ impl ChatEngine {
                 Ok(crate::skills::search_skills(query, &self.skills_dir))
             }
             ToolName::WebSearch => self.tool_web_search(input).await,
+            ToolName::FetchPage => self.tool_fetch_page(input).await,
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -1038,6 +1039,115 @@ impl ChatEngine {
         }
 
         Ok(lines.join("\n"))
+    }
+
+    /// Fetch a web page and return its text content (HTML stripped).
+    async fn tool_fetch_page(&self, input: &serde_json::Value) -> Result<String> {
+        let url = input["url"]
+            .as_str()
+            .context("Missing required parameter: url")?;
+        let max_chars = input["max_chars"].as_u64().unwrap_or(3000).min(8000) as usize;
+
+        let response = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (compatible; TrustyIzzie/1.0)")
+            .build()?
+            .get(url)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .context("Failed to fetch page")?
+            .error_for_status()
+            .context("Page returned error status")?
+            .text()
+            .await
+            .context("Failed to read page body")?;
+
+        // Strip HTML tags with a simple regex-free approach
+        let mut text = String::with_capacity(response.len());
+        let mut in_tag = false;
+        let mut in_script = false;
+        let mut prev_was_space = false;
+        let lower = response.to_lowercase();
+        let bytes = response.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            // Skip <script>...</script> and <style>...</style> blocks
+            if !in_tag
+                && i + 7 <= lower.len()
+                && (&lower[i..i + 7] == "<script" || &lower[i..i + 6] == "<style")
+            {
+                in_script = true;
+            }
+            if in_script {
+                if i + 9 <= lower.len() && &lower[i..i + 9] == "</script>" {
+                    i += 9;
+                    in_script = false;
+                    continue;
+                }
+                if i + 8 <= lower.len() && &lower[i..i + 8] == "</style>" {
+                    i += 8;
+                    in_script = false;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            match bytes[i] {
+                b'<' => {
+                    in_tag = true;
+                    i += 1;
+                }
+                b'>' => {
+                    in_tag = false;
+                    // Tags act as whitespace
+                    if !prev_was_space {
+                        text.push(' ');
+                        prev_was_space = true;
+                    }
+                    i += 1;
+                }
+                c if !in_tag => {
+                    let ch = c as char;
+                    if ch.is_whitespace() {
+                        if !prev_was_space {
+                            text.push(' ');
+                            prev_was_space = true;
+                        }
+                    } else {
+                        text.push(ch);
+                        prev_was_space = false;
+                    }
+                    i += 1;
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+
+        // Decode basic HTML entities
+        let text = text
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "\'")
+            .replace("&nbsp;", " ");
+
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(format!("No readable content found at {url}"));
+        }
+
+        let excerpt: String = trimmed.chars().take(max_chars).collect();
+        Ok(format!(
+            "Content from {url}:\n\n{excerpt}{}",
+            if trimmed.len() > max_chars {
+                "\n\n[truncated]"
+            } else {
+                ""
+            }
+        ))
     }
 
     async fn fetch_calendar_events_for(&self, email: &str, days: i64) -> Result<Vec<String>> {
@@ -2156,6 +2266,7 @@ I can check my own service status with `check_service_status`, report my version
 - `get_train_alerts`: Fetch active Metro North service alerts and delays. Optional: line (e.g. "Hudson", "New Haven", "Harlem"). Returns current disruptions.
 - `search_skills`: Discover available skills by keyword. Required: query (string). Returns matching skill names, descriptions, and tool names. Use when unsure if a capability exists.
 - `web_search`: Search the web using Brave Search. Required: query (string). Optional: count (default 5, max 10). Returns titles, descriptions, and URLs of top results.
+- `fetch_page`: Fetch and read the text content of a URL. Required: url (string). Optional: max_chars (default 3000, max 8000). Use after web_search to get full article/review content.
 
 ## Proactive Features
 I proactively send you briefings and updates. You can customize these:

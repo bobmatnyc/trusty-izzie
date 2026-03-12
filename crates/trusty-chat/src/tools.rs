@@ -103,6 +103,7 @@ pub enum ToolName {
     SearchSkills,
     /// Search the web using the Brave Search API.
     WebSearch,
+    FetchPage,
 }
 
 /// A parsed tool call request from the LLM.
