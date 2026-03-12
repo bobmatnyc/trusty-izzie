@@ -40,5 +40,4 @@ Parameters:
 ## Usage Notes
 - Schedules are based on real-time GTFS-Realtime data from MTA
 - Train times are in Eastern time
-- Requires MTA_API_KEY environment variable to be set
-- If no API key is configured, inform the user they need to register at https://api.mta.info and add MTA_API_KEY to .env
+- No API key required — MTA feeds are publicly accessible

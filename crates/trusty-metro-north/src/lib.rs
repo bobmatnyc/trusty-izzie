@@ -10,9 +10,6 @@ use serde_json::Value;
 /// Fetch upcoming trains between two stations.
 /// Arguments: { "from_station": "...", "to_station": "...", "count": 5 }
 pub async fn get_train_schedule(args: &Value) -> Result<String> {
-    let api_key = std::env::var("MTA_API_KEY")
-        .context("MTA_API_KEY not set. Register at https://api.mta.info to get a free API key.")?;
-
     let from_name = args["from_station"]
         .as_str()
         .context("Missing from_station")?;
@@ -24,7 +21,7 @@ pub async fn get_train_schedule(args: &Value) -> Result<String> {
     let to_id =
         stations::find_stop_id(to_name).with_context(|| format!("Unknown station: '{to_name}'"))?;
 
-    let feed = client::fetch_feed(&api_key).await?;
+    let feed = client::fetch_feed().await?;
     let departures = parser::extract_departures(&feed, from_id, to_id, count);
 
     if departures.is_empty() {
@@ -80,12 +77,9 @@ pub async fn get_train_schedule(args: &Value) -> Result<String> {
 /// Fetch active service alerts.
 /// Arguments: { "line": "New Haven" }
 pub async fn get_train_alerts(args: &Value) -> Result<String> {
-    let api_key = std::env::var("MTA_API_KEY")
-        .context("MTA_API_KEY not set. Register at https://api.mta.info to get a free API key.")?;
-
     let line_filter = args["line"].as_str();
 
-    let feed = client::fetch_feed(&api_key).await?;
+    let feed = client::fetch_feed().await?;
     let alerts = parser::extract_alerts(&feed, line_filter);
 
     if alerts.is_empty() {
