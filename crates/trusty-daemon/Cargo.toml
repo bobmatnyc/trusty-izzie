@@ -18,6 +18,7 @@ path = "src/lib.rs"
 trusty-models = { path = "../trusty-models" }
 trusty-core = { path = "../trusty-core" }
 trusty-metro-north = { path = "../trusty-metro-north" }
+trusty-weather = { path = "../trusty-weather" }
 trusty-email = { path = "../trusty-email" }
 trusty-extractor = { path = "../trusty-extractor" }
 trusty-embeddings = { path = "../trusty-embeddings" }

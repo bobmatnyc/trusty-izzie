@@ -10089,6 +10089,7 @@ dependencies = [
  "trusty-metro-north",
  "trusty-models",
  "trusty-store",
+ "trusty-weather",
  "urlencoding",
  "uuid",
 ]
@@ -10157,6 +10158,7 @@ dependencies = [
  "trusty-metro-north",
  "trusty-models",
  "trusty-store",
+ "trusty-weather",
  "uuid",
 ]
 
@@ -10397,6 +10399,20 @@ dependencies = [
  "trusty-core",
  "trusty-models",
  "trusty-store",
+]
+
+[[package]]
+name = "trusty-weather"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "urlencoding",
 ]
 
 [[package]]

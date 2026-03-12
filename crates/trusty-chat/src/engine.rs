@@ -192,6 +192,12 @@ impl ChatEngine {
             }
             ToolName::WebSearch => self.tool_web_search(input).await,
             ToolName::FetchPage => self.tool_fetch_page(input).await,
+            ToolName::GetWeather => trusty_weather::get_weather(input)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}")),
+            ToolName::GetWeatherAlerts => trusty_weather::get_weather_alerts(input)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}")),
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -374,6 +380,7 @@ impl ChatEngine {
             },
             EventType::MessageInterruptCheck => EventPayload::MessageInterruptCheck {},
             EventType::TrainDelayCheck => EventPayload::TrainDelayCheck {},
+            EventType::WeatherCheck => EventPayload::WeatherCheck {},
         };
 
         let id = self.sqlite_ref()?.enqueue_event(
@@ -2230,7 +2237,8 @@ I can check my own service status with `check_service_status`, report my version
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
 - **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
-- **Web Search**: I can search the web in real time via `web_search` (Brave Search API). Use this for current events, news, prices, weather, and any information that may have changed since my training cutoff.
+- **Weather**: I fetch real-time forecasts via `get_weather` (Open-Meteo, no API key) and active NWS severe weather alerts via `get_weather_alerts`. Default location is Hastings-on-Hudson, NY.
+- **Web Search**: I can search the web in real time via `web_search` (Brave Search API). Use this for current events, news, prices, and any information that may have changed since my training cutoff.
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
@@ -2264,6 +2272,8 @@ I can check my own service status with `check_service_status`, report my version
 - `search_whatsapp`: Search WhatsApp messages. Params: contact (string, partial match), query (keyword), limit (default 20), days_back (default 30). Returns messages with contact, text, timestamp.
 - `get_train_schedule`: Fetch real-time Metro North departures between two stations. Required: from_station (e.g. "Hastings-on-Hudson", "Grand Central"), to_station. Optional: count (default 5, max 20). Returns upcoming train times with delays.
 - `get_train_alerts`: Fetch active Metro North service alerts and delays. Optional: line (e.g. "Hudson", "New Haven", "Harlem"). Returns current disruptions.
+- `get_weather`: Get weather forecast for a location. Optional: location (default: Hastings-on-Hudson), days (1-7, default 3). Returns daily summary + next 6 hours detail.
+- `get_weather_alerts`: Get active NWS severe weather alerts for a location (US only). Optional: location (default: Hastings-on-Hudson).
 - `search_skills`: Discover available skills by keyword. Required: query (string). Returns matching skill names, descriptions, and tool names. Use when unsure if a capability exists.
 - `web_search`: Search the web using Brave Search. Required: query (string). Optional: count (default 5, max 10). Returns titles, descriptions, and URLs of top results.
 - `fetch_page`: Fetch and read the text content of a URL. Required: url (string). Optional: max_chars (default 3000, max 8000). Use after web_search to get full article/review content.
@@ -2313,7 +2323,9 @@ NEVER fabricate factual information. For these topics you MUST call the appropri
 - WhatsApp history → `search_whatsapp` ALWAYS; never fabricate message content
 - Train schedules / Metro North / commute timing → `get_train_schedule` ALWAYS; never guess departure times
 - Train delays / service alerts → `get_train_alerts` ALWAYS
-- Current events, news, real-time information, prices, weather → `web_search`
+- Weather / forecast / temperature / rain / snow → `get_weather` ALWAYS; never guess weather from training data
+- Severe weather / storm warnings / alerts → `get_weather_alerts`
+- Current events, news, real-time information, prices → `web_search`
 
 If a tool returns no data (e.g. no calendar events), say so honestly. Never invent meetings, contacts, emails, or any factual data.
 

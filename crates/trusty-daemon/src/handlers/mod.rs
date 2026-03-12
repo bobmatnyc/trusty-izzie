@@ -21,6 +21,7 @@ pub mod reminder;
 pub mod train_delay_check;
 pub mod vip_email_check;
 pub mod watch_check;
+pub mod weather_check;
 pub mod weekly_digest;
 pub mod whatsapp_sync;
 
@@ -41,6 +42,7 @@ pub use reminder::ReminderHandler;
 pub use train_delay_check::TrainDelayCheckHandler;
 pub use vip_email_check::VipEmailCheckHandler;
 pub use watch_check::WatchCheckHandler;
+pub use weather_check::WeatherCheckHandler;
 pub use weekly_digest::WeeklyDigestHandler;
 pub use whatsapp_sync::WhatsAppSyncHandler;
 

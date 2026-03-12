@@ -104,6 +104,10 @@ pub enum ToolName {
     /// Search the web using the Brave Search API.
     WebSearch,
     FetchPage,
+    /// Get weather forecast for a location (Open-Meteo).
+    GetWeather,
+    /// Get active NWS severe weather alerts for a location (US only).
+    GetWeatherAlerts,
 }
 
 /// A parsed tool call request from the LLM.

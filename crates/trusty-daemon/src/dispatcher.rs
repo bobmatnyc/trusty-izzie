@@ -11,7 +11,8 @@ use crate::handlers::{
     EntityExtractionHandler, EveningBriefingHandler, EventHandler, FollowUpHandler,
     MemoryDecayHandler, MessageInterruptCheckHandler, MessagesSyncHandler, MorningBriefingHandler,
     NeedsReauthHandler, RelationshipNudgeHandler, ReminderHandler, TrainDelayCheckHandler,
-    VipEmailCheckHandler, WatchCheckHandler, WeeklyDigestHandler, WhatsAppSyncHandler,
+    VipEmailCheckHandler, WatchCheckHandler, WeatherCheckHandler, WeeklyDigestHandler,
+    WhatsAppSyncHandler,
 };
 
 pub struct EventDispatcher {
@@ -93,6 +94,7 @@ impl EventDispatcher {
             Box::new(VipEmailCheckHandler),
             Box::new(MessageInterruptCheckHandler),
             Box::new(TrainDelayCheckHandler),
+            Box::new(WeatherCheckHandler),
         ]
     }
 

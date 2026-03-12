@@ -235,6 +235,12 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
             EventPayload::TrainDelayCheck {},
             next_time_of_day_ts(7, 0),
         )?;
+        seed_if_absent(
+            sqlite,
+            EventType::WeatherCheck,
+            EventPayload::WeatherCheck {},
+            next_time_of_day_ts(7, 30),
+        )?;
     }
 
     let agents_dir = std::path::PathBuf::from(&config.agents.agents_dir);

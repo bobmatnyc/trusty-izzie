@@ -24,6 +24,7 @@ pub enum EventType {
     WatchCheck,
     MessageInterruptCheck,
     TrainDelayCheck,
+    WeatherCheck,
 }
 
 impl EventType {
@@ -48,6 +49,7 @@ impl EventType {
             EventType::WatchCheck => "watch_check",
             EventType::MessageInterruptCheck => "message_interrupt_check",
             EventType::TrainDelayCheck => "train_delay_check",
+            EventType::WeatherCheck => "weather_check",
         }
     }
 
@@ -71,6 +73,7 @@ impl EventType {
             EventType::WatchCheck => 4,
             EventType::MessageInterruptCheck => 4,
             EventType::TrainDelayCheck => 3,
+            EventType::WeatherCheck => 3,
             EventType::MemoryDecay => 8,
         }
     }
@@ -88,6 +91,7 @@ impl EventType {
             EventType::WatchCheck => 1,
             EventType::MessageInterruptCheck => 2,
             EventType::TrainDelayCheck => 1,
+            EventType::WeatherCheck => 1,
             EventType::VipEmailCheck => 2,
             EventType::EmailSync => 3,
             EventType::CalendarRefresh => 3,
@@ -123,6 +127,7 @@ impl std::str::FromStr for EventType {
             "watch_check" => Ok(EventType::WatchCheck),
             "message_interrupt_check" => Ok(EventType::MessageInterruptCheck),
             "train_delay_check" => Ok(EventType::TrainDelayCheck),
+            "weather_check" => Ok(EventType::WeatherCheck),
             _ => Err(format!("unknown event type: {}", s)),
         }
     }
@@ -191,6 +196,7 @@ pub enum EventPayload {
     },
     MessageInterruptCheck {},
     TrainDelayCheck {},
+    WeatherCheck {},
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
