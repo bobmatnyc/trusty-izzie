@@ -10160,6 +10160,7 @@ dependencies = [
  "trusty-models",
  "trusty-store",
  "trusty-weather",
+ "urlencoding",
  "uuid",
 ]
 

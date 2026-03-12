@@ -60,6 +60,245 @@ impl AgentRunHandler {
     }
 }
 
+fn agent_tool_definitions() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web using Brave Search API. Use for current information, news, facts you don't know.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Search query" },
+                        "count": { "type": "integer", "default": 5, "description": "Number of results (1-10)" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_page",
+                "description": "Fetch and read a web page as plain text. Use after web_search to get full content from a URL.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "URL to fetch" },
+                        "max_chars": { "type": "integer", "default": 4000, "description": "Max characters to return" }
+                    },
+                    "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_shell_command",
+                "description": "Execute a shell command and return stdout. Use sparingly for data processing tasks.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "Shell command to execute" }
+                    },
+                    "required": ["command"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_memories",
+                "description": "Search the user's stored memories and personal context by semantic query.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "What to search for" },
+                        "limit": { "type": "integer", "default": 5 }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
+    ])
+}
+
+async fn execute_agent_tool(name: &str, args: &serde_json::Value, _store: &Arc<Store>) -> String {
+    match name {
+        "web_search" => {
+            let query = args["query"].as_str().unwrap_or("");
+            let count = args["count"].as_u64().unwrap_or(5).min(10);
+            let api_key = match std::env::var("BRAVE_SEARCH_API_KEY") {
+                Ok(k) => k,
+                Err(_) => return "Error: BRAVE_SEARCH_API_KEY not set".into(),
+            };
+            let url = format!(
+                "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+                urlencoding::encode(query),
+                count
+            );
+            let client = reqwest::Client::new();
+            match client
+                .get(&url)
+                .header("Accept", "application/json")
+                .header("X-Subscription-Token", &api_key)
+                .send()
+                .await
+            {
+                Ok(resp) => match resp.json::<serde_json::Value>().await {
+                    Ok(json) => {
+                        let results = json["web"]["results"]
+                            .as_array()
+                            .map(|arr| {
+                                arr.iter()
+                                    .map(|r| {
+                                        format!(
+                                            "**{}**\n{}\n{}",
+                                            r["title"].as_str().unwrap_or(""),
+                                            r["description"].as_str().unwrap_or(""),
+                                            r["url"].as_str().unwrap_or("")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n\n")
+                            })
+                            .unwrap_or_default();
+                        if results.is_empty() {
+                            "No results found.".into()
+                        } else {
+                            results
+                        }
+                    }
+                    Err(e) => format!("Parse error: {e}"),
+                },
+                Err(e) => format!("Request error: {e}"),
+            }
+        }
+        "fetch_page" => {
+            let url = args["url"].as_str().unwrap_or("");
+            let max_chars = args["max_chars"].as_u64().unwrap_or(4000) as usize;
+            let client = reqwest::Client::builder()
+                .user_agent("TrustyIzzie-Agent/1.0")
+                .build()
+                .unwrap_or_default();
+            match client.get(url).send().await {
+                Ok(resp) => match resp.text().await {
+                    Ok(html) => {
+                        // Strip HTML tags and script blocks
+                        let mut out = String::with_capacity(html.len());
+                        let mut in_tag = false;
+                        let mut in_script = false;
+                        let lower = html.to_lowercase();
+                        let mut i = 0;
+                        let bytes = html.as_bytes();
+                        while i < bytes.len() {
+                            if !in_script && i + 7 < bytes.len() && &lower[i..i + 7] == "<script" {
+                                in_script = true;
+                            }
+                            if in_script {
+                                if i + 9 < bytes.len() && &lower[i..i + 9] == "</script>" {
+                                    in_script = false;
+                                    i += 9;
+                                } else {
+                                    i += 1;
+                                }
+                                continue;
+                            }
+                            if bytes[i] == b'<' {
+                                in_tag = true;
+                            } else if bytes[i] == b'>' {
+                                in_tag = false;
+                                out.push(' ');
+                            } else if !in_tag {
+                                out.push(bytes[i] as char);
+                            }
+                            i += 1;
+                        }
+                        let text: String = out.split_whitespace().collect::<Vec<_>>().join(" ");
+                        if text.len() > max_chars {
+                            text[..max_chars].to_string()
+                        } else {
+                            text
+                        }
+                    }
+                    Err(e) => format!("Read error: {e}"),
+                },
+                Err(e) => format!("Fetch error: {e}"),
+            }
+        }
+        "execute_shell_command" => {
+            let command = args["command"].as_str().unwrap_or("");
+            match tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .output()
+                .await
+            {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if stdout.is_empty() && !stderr.is_empty() {
+                        format!("stderr: {stderr}")
+                    } else {
+                        stdout.to_string()
+                    }
+                }
+                Err(e) => format!("Command error: {e}"),
+            }
+        }
+        "search_memories" => {
+            // LanceStore::search_memories requires a pre-computed embedding vector;
+            // no plain-text search wrapper exists at the Store level yet.
+            let _ = args;
+            "Memory search not available from agent context.".into()
+        }
+        other => format!("Unknown tool: {other}"),
+    }
+}
+
+async fn push_telegram_notification(store: &Arc<Store>, agent_name: &str, output: &str) {
+    let token = match std::env::var("TELEGRAM_BOT_TOKEN") {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let chat_id_str = match store
+        .sqlite
+        .get_config("telegram_primary_chat_id")
+        .ok()
+        .flatten()
+    {
+        Some(id) => id,
+        None => return,
+    };
+    let chat_id: i64 = match chat_id_str.parse() {
+        Ok(id) => id,
+        Err(_) => return,
+    };
+
+    let preview = if output.len() > 800 {
+        format!("{}…", &output[..800])
+    } else {
+        output.to_string()
+    };
+
+    let text = format!("🤖 *Agent: {}* finished\n\n{}", agent_name, preview);
+
+    let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+    let client = reqwest::Client::new();
+    let _ = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown"
+        }))
+        .send()
+        .await;
+    // Ignore errors — notification is best-effort
+}
+
 #[async_trait]
 impl EventHandler for AgentRunHandler {
     fn event_type(&self) -> EventType {
@@ -120,7 +359,7 @@ impl EventHandler for AgentRunHandler {
             .map_err(|e| TrustyError::Storage(e.to_string()))?;
         }
 
-        // 3. Build OpenRouter request
+        // 3. Build system prompt
         let system = if let Some(ctx) = &context {
             format!("{instructions}\n\n## Additional Context\n\n{ctx}")
         } else {
@@ -129,76 +368,134 @@ impl EventHandler for AgentRunHandler {
 
         let max_tokens = (max_runtime_mins * 1000).clamp(1000, 32000);
 
-        let request_body = serde_json::json!({
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": task_description}
-            ],
-            "max_tokens": max_tokens
-        });
-
-        // 4. Call OpenRouter
+        // 4. Tool loop
         let url = format!(
             "{}/chat/completions",
             self.openrouter_base.trim_end_matches('/')
         );
         let client = reqwest::Client::new();
-        let response = client
-            .post(&url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.openrouter_api_key),
-            )
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| TrustyError::Http(format!("OpenRouter request failed: {e}")))?;
+        let tools = agent_tool_definitions();
 
-        if !response.status().is_success() {
-            let err = response
-                .text()
+        let mut messages: Vec<serde_json::Value> =
+            vec![serde_json::json!({"role": "user", "content": task_description})];
+
+        let max_iterations = 10u32;
+        let mut final_output = String::new();
+
+        for iteration in 0..max_iterations {
+            let request_body = serde_json::json!({
+                "model": model,
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": "auto"
+            });
+
+            let response = client
+                .post(&url)
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.openrouter_api_key),
+                )
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
                 .await
-                .unwrap_or_else(|_| "unknown error".into());
-            error!("AgentRun {task_id}: OpenRouter error: {err}");
-            let sqlite = store.sqlite.clone();
-            let tid = task_id.clone();
-            let err_clone = err.clone();
-            tokio::task::spawn_blocking(move || {
-                sqlite.update_agent_task(&tid, "error", None, Some(&err_clone))
-            })
-            .await
-            .map_err(|e| TrustyError::Storage(e.to_string()))?
-            .map_err(|e| TrustyError::Storage(e.to_string()))?;
-            return Err(TrustyError::Http(format!("OpenRouter error: {err}")));
+                .map_err(|e| TrustyError::Http(format!("OpenRouter request failed: {e}")))?;
+
+            if !response.status().is_success() {
+                let err = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "unknown error".into());
+                error!("AgentRun {task_id}: OpenRouter error: {err}");
+                let sqlite = store.sqlite.clone();
+                let tid = task_id.clone();
+                let err_clone = err.clone();
+                tokio::task::spawn_blocking(move || {
+                    sqlite.update_agent_task(&tid, "error", None, Some(&err_clone))
+                })
+                .await
+                .map_err(|e| TrustyError::Storage(e.to_string()))?
+                .map_err(|e| TrustyError::Storage(e.to_string()))?;
+                return Err(TrustyError::Http(format!("OpenRouter error: {err}")));
+            }
+
+            let resp_json: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| TrustyError::Serialization(format!("parse error: {e}")))?;
+
+            let choice = &resp_json["choices"][0];
+            let finish_reason = choice["finish_reason"].as_str().unwrap_or("stop");
+            let message = &choice["message"];
+
+            // Add assistant message to history
+            messages.push(message.clone());
+
+            if finish_reason == "tool_calls" {
+                let tool_calls = message["tool_calls"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                for tc in &tool_calls {
+                    let tool_name = tc["function"]["name"].as_str().unwrap_or("");
+                    let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
+                    let args: serde_json::Value =
+                        serde_json::from_str(args_str).unwrap_or_default();
+
+                    info!("Agent {task_id} iter {iteration}: calling tool {tool_name}");
+
+                    let result = execute_agent_tool(tool_name, &args, store).await;
+
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result
+                    }));
+                }
+            } else {
+                // Terminal response — extract text
+                final_output = message["content"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        message["content"].as_array().and_then(|arr| {
+                            arr.iter()
+                                .find(|b| b["type"] == "text")
+                                .and_then(|b| b["text"].as_str())
+                                .map(|s| s.to_string())
+                        })
+                    })
+                    .unwrap_or_default();
+                break;
+            }
         }
 
-        let resp_json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| TrustyError::Serialization(format!("parse error: {e}")))?;
-
-        let output = resp_json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        if final_output.is_empty() {
+            final_output = "Agent completed but produced no text output.".to_string();
+        }
 
         // 5. Store result
         info!(
             "AgentRun {task_id} completed, output {} chars",
-            output.len()
+            final_output.len()
         );
         {
             let sqlite = store.sqlite.clone();
             let tid = task_id.clone();
+            let out = final_output.clone();
             tokio::task::spawn_blocking(move || {
-                sqlite.update_agent_task(&tid, "done", Some(&output), None)
+                sqlite.update_agent_task(&tid, "done", Some(&out), None)
             })
             .await
             .map_err(|e| TrustyError::Storage(e.to_string()))?
             .map_err(|e| TrustyError::Storage(e.to_string()))?;
         }
+
+        // 6. Telegram notification (best-effort)
+        push_telegram_notification(store, &agent_name, &final_output).await;
 
         Ok(DispatchResult::Done)
     }

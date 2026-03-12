@@ -38,3 +38,4 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 clap = { workspace = true }
 rusqlite = { workspace = true }
+urlencoding = "2"
