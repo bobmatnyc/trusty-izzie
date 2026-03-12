@@ -504,6 +504,8 @@ fn memory_category_str(c: &MemoryCategory) -> &'static str {
         MemoryCategory::Decision => "decision",
         MemoryCategory::Event => "event",
         MemoryCategory::Reminder => "reminder",
+        MemoryCategory::Location => "location",
+        MemoryCategory::Contact => "contact",
         MemoryCategory::General => "general",
     }
 }
@@ -518,6 +520,8 @@ fn memory_category_from_str(s: &str) -> MemoryCategory {
         "decision" => MemoryCategory::Decision,
         "event" => MemoryCategory::Event,
         "reminder" => MemoryCategory::Reminder,
+        "location" => MemoryCategory::Location,
+        "contact" => MemoryCategory::Contact,
         _ => MemoryCategory::General,
     }
 }

@@ -24,7 +24,13 @@ pub enum MemoryCategory {
     Event,
     /// A time-based reminder or follow-up the user wants tracked.
     Reminder,
+    /// A physical location, address, or place the user cares about.
+    Location,
+    /// A contact method or account handle for a person.
+    Contact,
     /// Any other memory that does not fit above categories.
+    /// Also used as a fallback for any unrecognised category string.
+    #[serde(other)]
     General,
 }
 
@@ -42,6 +48,8 @@ impl MemoryCategory {
             MemoryCategory::Decision => 120.0,
             MemoryCategory::Event => 60.0,
             MemoryCategory::Reminder => 14.0,
+            MemoryCategory::Location => 365.0,
+            MemoryCategory::Contact => 365.0,
             MemoryCategory::General => 90.0,
         }
     }
