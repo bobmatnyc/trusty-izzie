@@ -190,6 +190,7 @@ impl ChatEngine {
                 let query = input["query"].as_str().unwrap_or("");
                 Ok(crate::skills::search_skills(query, &self.skills_dir))
             }
+            ToolName::WebSearch => self.tool_web_search(input).await,
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -978,6 +979,65 @@ impl ChatEngine {
         }
 
         serde_json::to_string(&results).context("failed to serialize WhatsApp results")
+    }
+
+    async fn tool_web_search(&self, input: &serde_json::Value) -> Result<String> {
+        let api_key =
+            std::env::var("BRAVE_SEARCH_API_KEY").context("BRAVE_SEARCH_API_KEY not set")?;
+        let query = input["query"]
+            .as_str()
+            .context("Missing required parameter: query")?;
+        let count = input["count"].as_u64().unwrap_or(5).min(10) as u32;
+
+        let url = format!(
+            "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+            urlencoding::encode(query),
+            count
+        );
+
+        let response: serde_json::Value = reqwest::Client::new()
+            .get(&url)
+            .header("Accept", "application/json")
+            .header("Accept-Encoding", "gzip")
+            .header("X-Subscription-Token", &api_key)
+            .send()
+            .await
+            .context("Brave Search request failed")?
+            .error_for_status()
+            .context("Brave Search API error")?
+            .json()
+            .await
+            .context("Failed to parse Brave Search response")?;
+
+        let results = response["web"]["results"]
+            .as_array()
+            .map(|arr| arr.as_slice())
+            .unwrap_or(&[]);
+
+        if results.is_empty() {
+            return Ok(format!("No results found for: {query}"));
+        }
+
+        let mut lines = vec![format!("Search results for \"{query}\":\n")];
+        for (i, result) in results.iter().enumerate() {
+            let title = result["title"].as_str().unwrap_or("(no title)");
+            let url = result["url"].as_str().unwrap_or("");
+            let desc = result["description"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect::<String>();
+            lines.push(format!(
+                "{}. **{}**\n   {}\n   {}\n",
+                i + 1,
+                title,
+                desc,
+                url
+            ));
+        }
+
+        Ok(lines.join("\n"))
     }
 
     async fn fetch_calendar_events_for(&self, email: &str, days: i64) -> Result<Vec<String>> {
@@ -1901,7 +1961,7 @@ impl ChatEngine {
             llm_messages.push(OrchatMessage {
                 role: "user".to_string(),
                 content: format!(
-                    "Tool results:\n\n{}Now please provide your final response. Remember to respond in the required JSON format with either a `reply` field for text responses or a `toolCalls` array for tool invocations.",
+                    "Tool results:\n\n{}\n\n\u{26a0}\u{fe0f} RESPOND WITH JSON ONLY \u{2014} no preamble, no explanation. Your response must be exactly:\n{{\"reply\":\"<your answer here>\",\"toolCalls\":[],\"memoriesToSave\":[],\"referencedEntities\":[]}}",
                     results_text
                 ),
             });
@@ -1930,7 +1990,7 @@ impl ChatEngine {
                 session_id: session.id,
                 role: MessageRole::Tool,
                 content: format!(
-                    "Tool results:\n\n{}Now please provide your final response. Remember to respond in the required JSON format with either a `reply` field for text responses or a `toolCalls` array for tool invocations.",
+                    "Tool results:\n\n{}\n\n\u{26a0}\u{fe0f} RESPOND WITH JSON ONLY \u{2014} no preamble, no explanation. Your response must be exactly:\n{{\"reply\":\"<your answer here>\",\"toolCalls\":[],\"memoriesToSave\":[],\"referencedEntities\":[]}}",
                     results_text
                 ),
                 tool_name: None,
@@ -2060,6 +2120,7 @@ I can check my own service status with `check_service_status`, report my version
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
 - **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
+- **Web Search**: I can search the web in real time via `web_search` (Brave Search API). Use this for current events, news, prices, weather, and any information that may have changed since my training cutoff.
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
@@ -2094,6 +2155,7 @@ I can check my own service status with `check_service_status`, report my version
 - `get_train_schedule`: Fetch real-time Metro North departures between two stations. Required: from_station (e.g. "Hastings-on-Hudson", "Grand Central"), to_station. Optional: count (default 5, max 20). Returns upcoming train times with delays.
 - `get_train_alerts`: Fetch active Metro North service alerts and delays. Optional: line (e.g. "Hudson", "New Haven", "Harlem"). Returns current disruptions.
 - `search_skills`: Discover available skills by keyword. Required: query (string). Returns matching skill names, descriptions, and tool names. Use when unsure if a capability exists.
+- `web_search`: Search the web using Brave Search. Required: query (string). Optional: count (default 5, max 10). Returns titles, descriptions, and URLs of top results.
 
 ## Proactive Features
 I proactively send you briefings and updates. You can customize these:
@@ -2140,6 +2202,7 @@ NEVER fabricate factual information. For these topics you MUST call the appropri
 - WhatsApp history → `search_whatsapp` ALWAYS; never fabricate message content
 - Train schedules / Metro North / commute timing → `get_train_schedule` ALWAYS; never guess departure times
 - Train delays / service alerts → `get_train_alerts` ALWAYS
+- Current events, news, real-time information, prices, weather → `web_search`
 
 If a tool returns no data (e.g. no calendar events), say so honestly. Never invent meetings, contacts, emails, or any factual data.
 
@@ -2275,7 +2338,17 @@ fn parse_response(raw: &str) -> StructuredResponse {
     }
 
     // 4. Fallback: treat the whole raw string as a plain-text reply.
-    tracing::warn!("parse_response fallback: treating raw LLM output as plain text reply. First 200 chars: {:?}", &raw.chars().take(200).collect::<String>());
+    if raw.trim_start().starts_with('{') {
+        tracing::warn!(
+            "parse_response: JSON found but failed to deserialize. First 200 chars: {:?}",
+            &raw.chars().take(200).collect::<String>()
+        );
+    } else {
+        tracing::debug!(
+            "parse_response: plain text response (no JSON wrapper). First 200 chars: {:?}",
+            &raw.chars().take(200).collect::<String>()
+        );
+    }
     StructuredResponse {
         reply: raw.to_string(),
         memories_to_save: vec![],

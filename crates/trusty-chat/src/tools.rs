@@ -101,6 +101,8 @@ pub enum ToolName {
     GetTrainAlerts,
     /// Discover available skills by keyword — returns matching skill names and descriptions.
     SearchSkills,
+    /// Search the web using the Brave Search API.
+    WebSearch,
 }
 
 /// A parsed tool call request from the LLM.

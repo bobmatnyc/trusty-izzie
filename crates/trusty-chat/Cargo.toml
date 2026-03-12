@@ -27,3 +27,4 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+urlencoding = "2"
