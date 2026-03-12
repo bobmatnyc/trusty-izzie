@@ -99,6 +99,8 @@ pub enum ToolName {
     GetTrainSchedule,
     /// Fetch current Metro North service alerts.
     GetTrainAlerts,
+    /// Discover available skills by keyword — returns matching skill names and descriptions.
+    SearchSkills,
 }
 
 /// A parsed tool call request from the LLM.

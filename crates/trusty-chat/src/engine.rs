@@ -186,6 +186,10 @@ impl ChatEngine {
             ToolName::GetTrainAlerts => trusty_metro_north::get_train_alerts(input)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}")),
+            ToolName::SearchSkills => {
+                let query = input["query"].as_str().unwrap_or("");
+                Ok(crate::skills::search_skills(query, &self.skills_dir))
+            }
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -367,6 +371,7 @@ impl ChatEngine {
                 topic: input["topic"].as_str().unwrap_or("").to_string(),
             },
             EventType::MessageInterruptCheck => EventPayload::MessageInterruptCheck {},
+            EventType::TrainDelayCheck => EventPayload::TrainDelayCheck {},
         };
 
         let id = self.sqlite_ref()?.enqueue_event(
@@ -2043,6 +2048,7 @@ I am trusty-izzie v{}, running as macOS launchd services:
 I can check my own service status with `check_service_status`, report my version with `get_version`, and file GitHub issues with `submit_github_issue`.
 
 ## What I Can Do
+- **Skills discovery**: Use `search_skills` when unsure whether a capability exists — e.g. search "train" to find commute tools, "calendar" for scheduling tools.
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
 - **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
@@ -2079,6 +2085,7 @@ I can check my own service status with `check_service_status`, report my version
 - `search_whatsapp`: Search WhatsApp messages. Params: contact (string, partial match), query (keyword), limit (default 20), days_back (default 30). Returns messages with contact, text, timestamp.
 - `get_train_schedule`: Fetch real-time Metro North departures between two stations. Required: from_station (e.g. "Hastings-on-Hudson", "Grand Central"), to_station. Optional: count (default 5, max 20). Returns upcoming train times with delays.
 - `get_train_alerts`: Fetch active Metro North service alerts and delays. Optional: line (e.g. "Hudson", "New Haven", "Harlem"). Returns current disruptions.
+- `search_skills`: Discover available skills by keyword. Required: query (string). Returns matching skill names, descriptions, and tool names. Use when unsure if a capability exists.
 
 ## Proactive Features
 I proactively send you briefings and updates. You can customize these:

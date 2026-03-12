@@ -10,8 +10,8 @@ use crate::handlers::{
     AgentRunHandler, CalendarRefreshHandler, ContactsSyncHandler, DispatchResult, EmailSyncHandler,
     EntityExtractionHandler, EveningBriefingHandler, EventHandler, FollowUpHandler,
     MemoryDecayHandler, MessageInterruptCheckHandler, MessagesSyncHandler, MorningBriefingHandler,
-    NeedsReauthHandler, RelationshipNudgeHandler, ReminderHandler, VipEmailCheckHandler,
-    WatchCheckHandler, WeeklyDigestHandler, WhatsAppSyncHandler,
+    NeedsReauthHandler, RelationshipNudgeHandler, ReminderHandler, TrainDelayCheckHandler,
+    VipEmailCheckHandler, WatchCheckHandler, WeeklyDigestHandler, WhatsAppSyncHandler,
 };
 
 pub struct EventDispatcher {
@@ -92,6 +92,7 @@ impl EventDispatcher {
             Box::new(RelationshipNudgeHandler),
             Box::new(VipEmailCheckHandler),
             Box::new(MessageInterruptCheckHandler),
+            Box::new(TrainDelayCheckHandler),
         ]
     }
 

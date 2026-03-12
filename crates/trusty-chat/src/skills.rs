@@ -118,6 +118,65 @@ fn format_skill(fm: &SkillFrontmatter, body: &str) -> String {
     out
 }
 
+/// Search skills by keyword — returns matching skill summaries.
+/// Returns a "no matches" message if nothing is found.
+pub fn search_skills(query: &str, skills_dir: &str) -> String {
+    let dir = std::path::Path::new(skills_dir);
+    if !dir.exists() {
+        return "No skills directory found.".to_string();
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut matches = Vec::new();
+
+    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(e) => e.flatten().collect(),
+        Err(_) => return format!("No skills found matching '{query}'."),
+    };
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        if path.file_name().and_then(|n| n.to_str()) == Some("README.md") {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if !content.to_lowercase().contains(&query_lower) {
+            continue;
+        }
+        let (fm_yaml, _body) = split_frontmatter(&content);
+        let summary = if let Some(yaml) = fm_yaml {
+            serde_yaml::from_str::<SkillFrontmatter>(yaml)
+                .map(|fm| {
+                    let name = fm.name.as_deref().unwrap_or("unnamed");
+                    let desc = fm.description.as_deref().unwrap_or("");
+                    let tools: Vec<&str> = fm.tools.iter().map(|t| t.name.as_str()).collect();
+                    if tools.is_empty() {
+                        format!("**{name}**: {desc}")
+                    } else {
+                        format!("**{name}**: {desc}\n  Tools: {}", tools.join(", "))
+                    }
+                })
+                .unwrap_or_else(|_| content.lines().take(3).collect::<Vec<_>>().join("\n"))
+        } else {
+            content.lines().take(3).collect::<Vec<_>>().join("\n")
+        };
+        matches.push(summary);
+    }
+
+    if matches.is_empty() {
+        format!("No skills found matching '{query}'.")
+    } else {
+        format!("Skills matching '{query}':\n\n{}", matches.join("\n\n"))
+    }
+}
+
 /// Load all skill files from the skills directory and return combined markdown
 /// for injection into the system prompt.
 /// Returns empty string if the directory doesn't exist or no skills are found.

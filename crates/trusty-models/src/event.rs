@@ -23,6 +23,7 @@ pub enum EventType {
     RelationshipNudge,
     WatchCheck,
     MessageInterruptCheck,
+    TrainDelayCheck,
 }
 
 impl EventType {
@@ -46,6 +47,7 @@ impl EventType {
             EventType::RelationshipNudge => "relationship_nudge",
             EventType::WatchCheck => "watch_check",
             EventType::MessageInterruptCheck => "message_interrupt_check",
+            EventType::TrainDelayCheck => "train_delay_check",
         }
     }
 
@@ -68,6 +70,7 @@ impl EventType {
             EventType::RelationshipNudge => 4,
             EventType::WatchCheck => 4,
             EventType::MessageInterruptCheck => 4,
+            EventType::TrainDelayCheck => 3,
             EventType::MemoryDecay => 8,
         }
     }
@@ -84,6 +87,7 @@ impl EventType {
             EventType::RelationshipNudge => 1,
             EventType::WatchCheck => 1,
             EventType::MessageInterruptCheck => 2,
+            EventType::TrainDelayCheck => 1,
             EventType::VipEmailCheck => 2,
             EventType::EmailSync => 3,
             EventType::CalendarRefresh => 3,
@@ -118,6 +122,7 @@ impl std::str::FromStr for EventType {
             "relationship_nudge" => Ok(EventType::RelationshipNudge),
             "watch_check" => Ok(EventType::WatchCheck),
             "message_interrupt_check" => Ok(EventType::MessageInterruptCheck),
+            "train_delay_check" => Ok(EventType::TrainDelayCheck),
             _ => Err(format!("unknown event type: {}", s)),
         }
     }
@@ -185,6 +190,7 @@ pub enum EventPayload {
         topic: String,
     },
     MessageInterruptCheck {},
+    TrainDelayCheck {},
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

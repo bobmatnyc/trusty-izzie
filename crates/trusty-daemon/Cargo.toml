@@ -17,6 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 trusty-models = { path = "../trusty-models" }
 trusty-core = { path = "../trusty-core" }
+trusty-metro-north = { path = "../trusty-metro-north" }
 trusty-email = { path = "../trusty-email" }
 trusty-extractor = { path = "../trusty-extractor" }
 trusty-embeddings = { path = "../trusty-embeddings" }

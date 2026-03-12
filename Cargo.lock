@@ -10153,6 +10153,7 @@ dependencies = [
  "trusty-embeddings",
  "trusty-extractor",
  "trusty-memory",
+ "trusty-metro-north",
  "trusty-models",
  "trusty-store",
  "uuid",
