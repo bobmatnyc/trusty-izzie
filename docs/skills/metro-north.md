@@ -18,6 +18,7 @@ tools:
         type: integer
         description: Number of upcoming trains to return
         default: 5
+    notes: "Track numbers are included when assigned by MTA (typically 20-30 min before departure at Grand Central, encoded via GTFS StopTimeProperties.assigned_stop_id or stop_id suffix)"
   - name: get_train_alerts
     description: Fetch active Metro North service alerts and delays
     parameters:

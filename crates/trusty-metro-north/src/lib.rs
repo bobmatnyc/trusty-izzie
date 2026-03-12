@@ -59,14 +59,21 @@ pub async fn get_train_schedule(args: &Value) -> Result<String> {
             .map(|h| format!(" to {h}"))
             .unwrap_or_default();
 
+        let track_str = dep
+            .track
+            .as_deref()
+            .map(|t| format!(" • Track {t}"))
+            .unwrap_or_default();
+
         let trip_short = &dep.trip_id[..dep.trip_id.len().min(8)];
         lines.push(format!(
-            "{}. {}{}{}{} [Trip {}]",
+            "{}. {}{}{}{}{} [Trip {}]",
             i + 1,
             time_str,
             delay_str,
             arrival_str,
             headsign,
+            track_str,
             trip_short
         ));
     }
