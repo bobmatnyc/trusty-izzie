@@ -19,7 +19,9 @@ use tracing_subscriber::{fmt, EnvFilter};
 use trusty_chat::context::ContextAssembler;
 use trusty_chat::engine::ChatEngine;
 use trusty_core::load_config;
+use trusty_metro_north::MetroNorthSkill;
 use trusty_store::SqliteStore;
+use trusty_weather::WeatherSkill;
 
 use server::McpServer;
 
@@ -72,6 +74,8 @@ async fn main() -> Result<()> {
     let agents_dir = expand_tilde(&config.agents.agents_dir);
     let skills_dir = expand_tilde(&config.agents.skills_dir);
 
+    let skills: Vec<Arc<dyn trusty_skill::Skill>> =
+        vec![Arc::new(MetroNorthSkill), Arc::new(WeatherSkill)];
     let engine = Arc::new(
         ChatEngine::new_with_context(
             config.openrouter.base_url.clone(),
@@ -82,7 +86,8 @@ async fn main() -> Result<()> {
         )
         .with_sqlite(Arc::clone(&sqlite))
         .with_agents_dir(agents_dir)
-        .with_skills_dir(skills_dir.to_string_lossy().into_owned()),
+        .with_skills_dir(skills_dir.to_string_lossy().into_owned())
+        .with_skills(skills),
     );
 
     let server = Arc::new(McpServer::new(engine));

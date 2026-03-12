@@ -14,6 +14,7 @@ trusty-extractor = { path = "../trusty-extractor" }
 trusty-email = { path = "../trusty-email" }
 trusty-metro-north = { path = "../trusty-metro-north" }
 trusty-weather = { path = "../trusty-weather" }
+trusty-skill = { path = "../trusty-skill" }
 
 reqwest = { workspace = true }
 rusqlite = { workspace = true }

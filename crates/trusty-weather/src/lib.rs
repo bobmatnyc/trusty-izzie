@@ -3,6 +3,9 @@
 pub mod alerts;
 pub mod forecast;
 pub mod geocode;
+pub mod skill;
+
+pub use skill::WeatherSkill;
 
 use anyhow::Result;
 use serde_json::Value;

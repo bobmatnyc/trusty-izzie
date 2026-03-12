@@ -10088,6 +10088,7 @@ dependencies = [
  "trusty-memory",
  "trusty-metro-north",
  "trusty-models",
+ "trusty-skill",
  "trusty-store",
  "trusty-weather",
  "urlencoding",
@@ -10256,8 +10257,11 @@ dependencies = [
  "trusty-core",
  "trusty-embeddings",
  "trusty-memory",
+ "trusty-metro-north",
  "trusty-models",
+ "trusty-skill",
  "trusty-store",
+ "trusty-weather",
  "uuid",
 ]
 
@@ -10284,6 +10288,7 @@ name = "trusty-metro-north"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "gtfs-rt",
  "prost 0.11.9",
@@ -10292,6 +10297,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "trusty-skill",
 ]
 
 [[package]]
@@ -10420,12 +10426,14 @@ name = "trusty-weather"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "trusty-skill",
  "urlencoding",
 ]
 

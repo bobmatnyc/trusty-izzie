@@ -3,7 +3,6 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 use trusty_chat::engine::ChatEngine;
-use trusty_chat::tools::ToolName;
 use trusty_chat::SessionManager;
 
 use crate::protocol::Tool;
@@ -220,79 +219,8 @@ pub fn all_tools() -> Vec<Tool> {
 pub async fn dispatch(engine: &ChatEngine, name: &str, arguments: &Value) -> Result<String> {
     match name {
         "chat" => tool_chat(engine, arguments).await,
-        "search_contacts" => {
-            engine
-                .execute_tool(&ToolName::SearchContacts, arguments)
-                .await
-        }
-        "get_calendar_events" => {
-            engine
-                .execute_tool(&ToolName::GetCalendarEvents, arguments)
-                .await
-        }
-        "create_calendar_event" => {
-            engine
-                .execute_tool(&ToolName::CreateCalendarEvent, arguments)
-                .await
-        }
-        "complete_task" => {
-            engine
-                .execute_tool(&ToolName::CompleteTask, arguments)
-                .await
-        }
-        "get_tasks_bulk" => {
-            engine
-                .execute_tool(&ToolName::GetTasksBulk, arguments)
-                .await
-        }
-        "get_tasks" => engine.execute_tool(&ToolName::GetTasks, arguments).await,
-        "search_memories" => {
-            engine
-                .execute_tool(&ToolName::SearchMemories, arguments)
-                .await
-        }
-        "search_entities" => {
-            engine
-                .execute_tool(&ToolName::SearchEntities, arguments)
-                .await
-        }
-        "get_entity_relationships" => {
-            engine
-                .execute_tool(&ToolName::GetEntityRelationships, arguments)
-                .await
-        }
         "get_context" => tool_get_context(engine, arguments).await,
-        "list_accounts" => {
-            engine
-                .execute_tool(&ToolName::ListAccounts, arguments)
-                .await
-        }
-        "schedule_event" => {
-            engine
-                .execute_tool(&ToolName::ScheduleEvent, arguments)
-                .await
-        }
-        "list_open_loops" => {
-            engine
-                .execute_tool(&ToolName::ListOpenLoops, arguments)
-                .await
-        }
-        "get_preferences" => {
-            engine
-                .execute_tool(&ToolName::GetPreferences, arguments)
-                .await
-        }
-        "get_train_schedule" => {
-            engine
-                .execute_tool(&ToolName::GetTrainSchedule, arguments)
-                .await
-        }
-        "get_train_alerts" => {
-            engine
-                .execute_tool(&ToolName::GetTrainAlerts, arguments)
-                .await
-        }
-        _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
+        other => engine.execute_tool_by_name(other, arguments).await,
     }
 }
 
@@ -322,23 +250,17 @@ async fn tool_get_context(engine: &ChatEngine, arguments: &Value) -> Result<Stri
         .ok_or_else(|| anyhow::anyhow!("Missing required parameter: query"))?;
 
     let memories = engine
-        .execute_tool(
-            &ToolName::SearchMemories,
-            &json!({"query": query, "limit": 5}),
-        )
+        .execute_tool_by_name("search_memories", &json!({"query": query, "limit": 5}))
         .await
         .unwrap_or_else(|e| format!("(unavailable: {e})"));
 
     let entities = engine
-        .execute_tool(
-            &ToolName::SearchEntities,
-            &json!({"query": query, "limit": 5}),
-        )
+        .execute_tool_by_name("search_entities", &json!({"query": query, "limit": 5}))
         .await
         .unwrap_or_else(|e| format!("(unavailable: {e})"));
 
     let calendar = engine
-        .execute_tool(&ToolName::GetCalendarEvents, &json!({"days": 14}))
+        .execute_tool_by_name("get_calendar_events", &json!({"days": 14}))
         .await
         .unwrap_or_else(|e| format!("(unavailable: {e})"));
 

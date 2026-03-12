@@ -33,3 +33,6 @@ trusty-core = { path = "../trusty-core" }
 trusty-models = { path = "../trusty-models" }
 trusty-memory = { path = "../trusty-memory" }
 trusty-embeddings = { path = "../trusty-embeddings" }
+trusty-metro-north = { path = "../trusty-metro-north" }
+trusty-weather = { path = "../trusty-weather" }
+trusty-skill = { path = "../trusty-skill" }

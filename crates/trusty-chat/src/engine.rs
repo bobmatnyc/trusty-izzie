@@ -35,6 +35,8 @@ pub struct ChatEngine {
     agents_dir: PathBuf,
     /// Directory containing skill Markdown files (injected into system prompt).
     skills_dir: String,
+    /// Dynamically registered skills (tool dispatch + system prompt contributions).
+    skills: Vec<std::sync::Arc<dyn trusty_skill::Skill>>,
 }
 
 // ── OpenRouter request/response types ────────────────────────────────────────
@@ -118,6 +120,7 @@ impl ChatEngine {
             sqlite: None,
             agents_dir: PathBuf::from("docs/agents"),
             skills_dir: "docs/skills".to_string(),
+            skills: vec![],
         }
     }
 
@@ -137,6 +140,37 @@ impl ChatEngine {
     pub fn with_skills_dir(mut self, skills_dir: String) -> Self {
         self.skills_dir = skills_dir;
         self
+    }
+
+    /// Register dynamically-dispatched skills with this engine.
+    pub fn with_skills(mut self, skills: Vec<std::sync::Arc<dyn trusty_skill::Skill>>) -> Self {
+        self.skills = skills;
+        self
+    }
+
+    /// Dispatch a tool call by name — core tools first, then registered skills.
+    pub async fn execute_tool_by_name(
+        &self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Result<String> {
+        // 1. Try core tools first.
+        if let Ok(tool) =
+            serde_json::from_value::<ToolName>(serde_json::Value::String(name.to_string()))
+        {
+            return self.execute_tool(&tool, args).await;
+        }
+        // 2. Try registered skills.
+        let call = trusty_skill::SkillToolCall {
+            name: name.to_string(),
+            arguments: args.clone(),
+        };
+        for skill in &self.skills {
+            if let Some(result) = skill.execute(&call).await {
+                return result;
+            }
+        }
+        Err(anyhow::anyhow!("Unknown tool: {name}"))
     }
 
     /// Execute a chat tool call and return the result as a string.
@@ -1933,7 +1967,15 @@ impl ChatEngine {
             .as_deref()
             .and_then(|s| s.list_all_prefs().ok())
             .unwrap_or_default();
-        let skills_content = crate::skills::load_skills(&self.skills_dir);
+        let mut skills_content = crate::skills::load_skills(&self.skills_dir);
+        for skill in &self.skills {
+            if let Some(contribution) = skill.system_prompt_contribution() {
+                if !skills_content.is_empty() {
+                    skills_content.push_str("\n\n");
+                }
+                skills_content.push_str(&contribution);
+            }
+        }
         let user_location = self
             .sqlite
             .as_deref()
@@ -2057,15 +2099,10 @@ impl ChatEngine {
             // Execute each requested tool.
             let mut results_text = String::new();
             for tc in &tool_calls {
-                let result = match serde_json::from_value::<ToolName>(serde_json::Value::String(
-                    tc.name.clone(),
-                )) {
-                    Ok(tool_name) => self
-                        .execute_tool(&tool_name, &tc.arguments)
-                        .await
-                        .unwrap_or_else(|e| format!("Error: {e}")),
-                    Err(_) => format!("Unknown tool: {}", tc.name),
-                };
+                let result = self
+                    .execute_tool_by_name(&tc.name, &tc.arguments)
+                    .await
+                    .unwrap_or_else(|e| format!("Error: {e}"));
                 tracing::info!(tool = %tc.name, "tool executed");
                 results_text.push_str(&format!("Tool `{}` returned:\n{}\n\n", tc.name, result));
             }

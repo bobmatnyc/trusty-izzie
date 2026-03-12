@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+trusty-skill = { path = "../trusty-skill" }
+async-trait = "0.1"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 gtfs-rt = "0.5"
