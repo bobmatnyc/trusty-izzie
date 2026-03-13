@@ -59,8 +59,8 @@
   <main class="installer">
     <header>
       <div class="logo">
-        <span class="logo-mark">✦</span>
-        <span class="logo-text">Izzie Installer</span>
+        <img src="/favicon.png" width="28" height="28" alt="Izzie" class="logo-img" />
+        <span class="logo-text">Izzie</span>
       </div>
       <div class="step-indicator">
         {#each { length: STEP_COUNT } as _, i}
@@ -145,13 +145,7 @@
   }
 
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; }
-  .logo-mark {
-    width: 32px; height: 32px;
-    background: linear-gradient(135deg, #2563eb, #4f46e5);
-    border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    color: white; font-size: 16px;
-  }
+  .logo-img { display: block; border-radius: 6px; }
 
   .step-indicator { display: flex; gap: 8px; }
   .dot {
