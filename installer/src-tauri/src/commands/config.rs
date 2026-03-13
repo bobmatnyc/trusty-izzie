@@ -16,10 +16,12 @@ pub enum SlackConfig {
         bot_token: String,
         app_token: String,
         user_token: Option<String>,
+        webhook_url: Option<String>,
     },
     Managed {
         router_url: String,
         router_token: String,
+        webhook_url: Option<String>,
     },
     Skip,
 }
@@ -75,6 +77,7 @@ pub async fn write_config(config: InstallerConfig) -> Result<(), String> {
             bot_token,
             app_token,
             user_token,
+            webhook_url,
         } => {
             writeln!(out, "# Slack").ok();
             writeln!(out, "SLACK_BOT_TOKEN={bot_token}").ok();
@@ -82,14 +85,25 @@ pub async fn write_config(config: InstallerConfig) -> Result<(), String> {
             if let Some(ut) = user_token {
                 writeln!(out, "SLACK_USER_TOKEN={ut}").ok();
             }
+            if let Some(wu) = webhook_url {
+                if !wu.is_empty() {
+                    writeln!(out, "SLACK_WEBHOOK_URL={wu}").ok();
+                }
+            }
         }
         SlackConfig::Managed {
             router_url,
             router_token,
+            webhook_url,
         } => {
             writeln!(out, "# Slack").ok();
             writeln!(out, "TRUSTY_ROUTER_URL={router_url}").ok();
             writeln!(out, "TRUSTY_ROUTER_TOKEN={router_token}").ok();
+            if let Some(wu) = webhook_url {
+                if !wu.is_empty() {
+                    writeln!(out, "SLACK_WEBHOOK_URL={wu}").ok();
+                }
+            }
         }
         SlackConfig::Skip => {}
     }

@@ -1,7 +1,7 @@
 <script lang="ts">
   export type SlackConfig =
-    | { mode: 'self'; botToken: string; appToken: string; userToken?: string }
-    | { mode: 'managed'; routerUrl: string; routerToken: string }
+    | { mode: 'self'; botToken: string; appToken: string; userToken?: string; webhookUrl: string }
+    | { mode: 'managed'; routerUrl: string; routerToken: string; webhookUrl: string }
     | { mode: 'skip' }
 
   let { onNext, onBack, onUpdate } = $props<{
@@ -16,6 +16,7 @@
   let userToken = $state('')
   let routerUrl = $state('https://router.izzie.dev')
   let routerToken = $state('')
+  let webhookUrl = $state('')
 
   function canContinue() {
     if (mode === 'self') return botToken.trim().length > 0 && appToken.trim().length > 0
@@ -26,10 +27,10 @@
   function handleNext() {
     let cfg: SlackConfig
     if (mode === 'self') {
-      cfg = { mode: 'self', botToken: botToken.trim(), appToken: appToken.trim() }
+      cfg = { mode: 'self', botToken: botToken.trim(), appToken: appToken.trim(), webhookUrl: webhookUrl.trim() }
       if (userToken.trim()) cfg = { ...cfg, userToken: userToken.trim() }
     } else if (mode === 'managed') {
-      cfg = { mode: 'managed', routerUrl: routerUrl.trim(), routerToken: routerToken.trim() }
+      cfg = { mode: 'managed', routerUrl: routerUrl.trim(), routerToken: routerToken.trim(), webhookUrl: webhookUrl.trim() }
     } else {
       cfg = { mode: 'skip' }
     }
@@ -65,6 +66,11 @@
               <label for="user-token">User Token <span class="label-note">(optional — post as you)</span></label>
               <input id="user-token" type="password" placeholder="xoxp-_______________" bind:value={userToken} />
             </div>
+            <div class="field">
+              <label for="webhook-url-self">Incoming Webhook URL <span class="label-note">(optional — proactive notifications)</span></label>
+              <input id="webhook-url-self" type="text" placeholder="https://hooks.slack.com/services/..." bind:value={webhookUrl} />
+              <a href="https://api.slack.com/apps" target="_blank" class="link">Get it from api.slack.com/apps → Your App → Incoming Webhooks</a>
+            </div>
             <a href="https://api.slack.com/apps" target="_blank" class="link">How to create a Slack app →</a>
           </div>
         {/if}
@@ -86,6 +92,11 @@
             <div class="field">
               <label for="router-token">Auth Token <span class="label-note">(provided by your admin)</span></label>
               <input id="router-token" type="password" placeholder="izzie_tok_________________________" bind:value={routerToken} />
+            </div>
+            <div class="field">
+              <label for="webhook-url-managed">Incoming Webhook URL <span class="label-note">(optional — proactive notifications)</span></label>
+              <input id="webhook-url-managed" type="text" placeholder="https://hooks.slack.com/services/..." bind:value={webhookUrl} />
+              <a href="https://api.slack.com/apps" target="_blank" class="link">Get it from api.slack.com/apps → Your App → Incoming Webhooks</a>
             </div>
             <p class="note">Your token is issued by the router admin — it links your Slack identity to this instance.</p>
           </div>
