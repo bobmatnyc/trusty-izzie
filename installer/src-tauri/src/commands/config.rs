@@ -19,6 +19,7 @@ pub enum SlackConfig {
     },
     Managed {
         router_url: String,
+        router_token: String,
     },
     Skip,
 }
@@ -83,9 +84,13 @@ pub async fn write_config(config: InstallerConfig) -> Result<(), String> {
                 writeln!(out, "SLACK_USER_TOKEN={ut}").ok();
             }
         }
-        SlackConfig::Managed { router_url } => {
+        SlackConfig::Managed {
+            router_url,
+            router_token,
+        } => {
             writeln!(out, "# Slack").ok();
             writeln!(out, "TRUSTY_ROUTER_URL={router_url}").ok();
+            writeln!(out, "TRUSTY_ROUTER_TOKEN={router_token}").ok();
         }
         SlackConfig::Skip => {}
     }

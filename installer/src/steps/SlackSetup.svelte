@@ -1,7 +1,7 @@
 <script lang="ts">
   export type SlackConfig =
     | { mode: 'self'; botToken: string; appToken: string; userToken?: string }
-    | { mode: 'managed'; routerUrl: string }
+    | { mode: 'managed'; routerUrl: string; routerToken: string }
     | { mode: 'skip' }
 
   let { onNext, onBack, onUpdate } = $props<{
@@ -15,10 +15,11 @@
   let appToken = $state('')
   let userToken = $state('')
   let routerUrl = $state('https://router.izzie.dev')
+  let routerToken = $state('')
 
   function canContinue() {
     if (mode === 'self') return botToken.trim().length > 0 && appToken.trim().length > 0
-    if (mode === 'managed') return routerUrl.trim().length > 0
+    if (mode === 'managed') return routerUrl.trim().length > 0 && routerToken.trim().length > 0
     return true
   }
 
@@ -28,7 +29,7 @@
       cfg = { mode: 'self', botToken: botToken.trim(), appToken: appToken.trim() }
       if (userToken.trim()) cfg = { ...cfg, userToken: userToken.trim() }
     } else if (mode === 'managed') {
-      cfg = { mode: 'managed', routerUrl: routerUrl.trim() }
+      cfg = { mode: 'managed', routerUrl: routerUrl.trim(), routerToken: routerToken.trim() }
     } else {
       cfg = { mode: 'skip' }
     }
@@ -82,7 +83,11 @@
               <label for="router-url">Router URL</label>
               <input id="router-url" type="text" placeholder="https://router.izzie.dev" bind:value={routerUrl} />
             </div>
-            <p class="note">You'll authenticate with Google in the next step</p>
+            <div class="field">
+              <label for="router-token">Auth Token <span class="label-note">(provided by your admin)</span></label>
+              <input id="router-token" type="password" placeholder="izzie_tok_________________________" bind:value={routerToken} />
+            </div>
+            <p class="note">Your token is issued by the router admin — it links your Slack identity to this instance.</p>
           </div>
         {/if}
       </label>
