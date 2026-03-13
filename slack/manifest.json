@@ -1,0 +1,82 @@
+{
+    "display_information": {
+        "name": "Izzie",
+        "description": "Personal Assistant",
+        "background_color": "#093ede",
+        "long_description": "Izzie is your private AI assistant that knows your professional context — your relationships, email history, and calendar — and helps you work smarter across every channel.\r\n\r\n  What Izzie does:\r\n\r\n  \ud83d\udcac Conversational AI in Slack — Talk to Izzie just like you would a colleague. Ask questions, search your data, get answers.\r\n\r\n  \ud83d\udcc5 Calendar & Tasks — \"What's on my calendar this week?\" \"Create a task to follow up with Sarah by Friday.\" Izzie has live access to your Google Calendar and Tasks.\r\n\r\n  \u2709\ufe0f Email drafting — Ask Izzie to draft an email or reply. It'll show you a preview and wait for your approval before sending — you stay in control.\r\n\r\n  \ud83d\udd0d Unified search — Search across your iMessage history, Slack messages, calendar, tasks, and the web in a single command.\r\n\r\n  \ud83c\udf24\ufe0f Proactive briefings — Morning summaries, weather alerts, train delays, and follow-up reminders delivered directly to you.\r\n\r\n  \ud83e\udd16 Proxy mode — Izzie can monitor channels and draft suggested replies for your review. Approve with one word, edit, or ignore — your choice.\r\n\r\n  \ud83d\udee0\ufe0f Self-extending — Izzie can design and build new capabilities on demand. Just describe what you want and it handles the rest.\r\n\r\n  Izzie runs locally on your Mac. Your data never leaves your machine."
+    },
+    "features": {
+        "app_home": {
+            "home_tab_enabled": true,
+            "messages_tab_enabled": true,
+            "messages_tab_read_only_enabled": false
+        },
+        "bot_user": {
+            "display_name": "Izzie Personal Assistant",
+            "always_online": true
+        },
+        "assistant_view": {
+            "assistant_description": "Your personal AI that knows your professional context — contacts, emails, projects, and schedule. Ask me to search your network, draft messages, check trains, or pull up anything from your history. Approves actions before sending on your behalf.",
+            "suggested_prompts": []
+        }
+    },
+    "oauth_config": {
+        "redirect_urls": [
+            "https://izzie.ngrok.dev/api/auth/slack/callback"
+        ],
+        "scopes": {
+            "user": [
+                "chat:write",
+                "im:history",
+                "im:read",
+                "im:write",
+                "reminders:read",
+                "search:read",
+                "channels:history",
+                "groups:history",
+                "mpim:history",
+                "users:read",
+                "users:read.email"
+            ],
+            "bot": [
+                "app_mentions:read",
+                "assistant:write",
+                "channels:history",
+                "channels:join",
+                "chat:write",
+                "emoji:read",
+                "files:read",
+                "groups:history",
+                "groups:read",
+                "im:history",
+                "im:read",
+                "im:write",
+                "im:write.topic",
+                "incoming-webhook",
+                "links:read",
+                "mpim:history",
+                "mpim:read",
+                "mpim:write",
+                "users:read"
+            ]
+        }
+    },
+    "settings": {
+        "event_subscriptions": {
+            "bot_events": [
+                "app_mention",
+                "assistant_thread_started",
+                "assistant_thread_context_changed",
+                "message.channels",
+                "message.groups",
+                "message.im"
+            ]
+        },
+        "interactivity": {
+            "is_enabled": true
+        },
+        "org_deploy_enabled": false,
+        "socket_mode_enabled": true,
+        "token_rotation_enabled": false
+    }
+}
