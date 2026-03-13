@@ -105,6 +105,80 @@ pub async fn get_user_display_name(token: &str, user_id: &str) -> String {
     }
 }
 
+/// A single suggested prompt shown in the Slack Assistant panel.
+pub struct SuggestedPrompt {
+    pub title: String,
+    pub message: String,
+}
+
+/// POST assistant.threads.setSuggestedPrompts
+pub async fn set_suggested_prompts(
+    token: &str,
+    channel_id: &str,
+    thread_ts: &str,
+    prompts: &[SuggestedPrompt],
+) -> Result<()> {
+    let prompt_values: Vec<serde_json::Value> = prompts
+        .iter()
+        .map(|p| serde_json::json!({"title": p.title, "message": p.message}))
+        .collect();
+
+    let body = serde_json::json!({
+        "channel_id": channel_id,
+        "thread_ts": thread_ts,
+        "prompts": prompt_values,
+    });
+
+    let resp: SlackResponse = reqwest::Client::new()
+        .post(format!("{SLACK_API}/assistant.threads.setSuggestedPrompts"))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .context("setSuggestedPrompts request failed")?
+        .json()
+        .await
+        .context("setSuggestedPrompts response parse failed")?;
+
+    if !resp.ok {
+        anyhow::bail!(
+            "setSuggestedPrompts error: {}",
+            resp.error.unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+/// POST assistant.threads.setStatus
+pub async fn set_thread_status(
+    token: &str,
+    channel_id: &str,
+    thread_ts: &str,
+    status: &str,
+) -> Result<()> {
+    let body = serde_json::json!({
+        "channel_id": channel_id,
+        "thread_ts": thread_ts,
+        "status": status,
+    });
+
+    let resp: SlackResponse = reqwest::Client::new()
+        .post(format!("{SLACK_API}/assistant.threads.setStatus"))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .context("setStatus request failed")?
+        .json()
+        .await
+        .context("setStatus response parse failed")?;
+
+    if !resp.ok {
+        anyhow::bail!("setStatus error: {}", resp.error.unwrap_or_default());
+    }
+    Ok(())
+}
+
 // ── response types ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

@@ -37,9 +37,33 @@ pub enum SlackEvent {
     AppMention(MessageEvent),
     /// A message was posted (DMs, channel messages).
     Message(MessageEvent),
+    /// User opened the Izzie assistant panel.
+    AssistantThreadStarted { assistant_thread: AssistantThread },
+    /// Context changed while the assistant panel is open.
+    AssistantThreadContextChanged { assistant_thread: AssistantThread },
     /// Any other event type — ignored.
     #[serde(other)]
     Other,
+}
+
+/// Metadata Slack sends with assistant_thread_* events.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub struct AssistantThread {
+    pub user_id: String,
+    pub channel_id: String,
+    pub thread_ts: String,
+    pub context: Option<AssistantContext>,
+}
+
+/// Optional context attached to an AssistantThread.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub struct AssistantContext {
+    pub channel_id: Option<String>,
+    pub team_id: Option<String>,
 }
 
 /// Common fields for message-like events.

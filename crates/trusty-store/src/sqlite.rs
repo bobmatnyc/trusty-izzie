@@ -1397,6 +1397,19 @@ impl SqliteStore {
         Ok(id)
     }
 
+    /// Count actions currently in the pending queue.
+    pub fn count_pending_actions(&self) -> Result<i64, rusqlite::Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        conn.query_row(
+            "SELECT COUNT(*) FROM pending_actions WHERE status='pending'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+    }
+
     /// List pending (unresolved) actions.
     pub fn list_pending_actions(&self) -> Result<Vec<PendingAction>> {
         let conn = self

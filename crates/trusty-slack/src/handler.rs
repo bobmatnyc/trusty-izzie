@@ -35,7 +35,9 @@ use trusty_store::Store;
 
 use crate::{
     api,
-    events::{ChallengeResponse, EventCallback, MessageEvent, SlackEvent, SlackPayload},
+    events::{
+        AssistantThread, ChallengeResponse, EventCallback, MessageEvent, SlackEvent, SlackPayload,
+    },
     proxy::{self, ProxyState},
     verify,
 };
@@ -153,8 +155,96 @@ async fn dispatch_event(state: Arc<SlackState>, callback: EventCallback) {
                 // If not proxy and not mentioned, ignore (reduce noise).
             }
         }
+        SlackEvent::AssistantThreadStarted { assistant_thread } => {
+            handle_assistant_thread_started(&state, assistant_thread).await;
+        }
+        SlackEvent::AssistantThreadContextChanged { assistant_thread } => {
+            handle_assistant_thread_started(&state, assistant_thread).await;
+        }
         SlackEvent::Other => {}
     }
+}
+
+async fn handle_assistant_thread_started(state: &Arc<SlackState>, thread: AssistantThread) {
+    // 1. Set status to "thinking" (fire-and-forget).
+    let _ = api::set_thread_status(
+        &state.bot_token,
+        &thread.channel_id,
+        &thread.thread_ts,
+        "is thinking\u{2026}",
+    )
+    .await;
+
+    // 2. Generate prompts.
+    let prompts = generate_suggested_prompts(state).await;
+
+    // 3. Set prompts.
+    if let Err(e) = api::set_suggested_prompts(
+        &state.bot_token,
+        &thread.channel_id,
+        &thread.thread_ts,
+        &prompts,
+    )
+    .await
+    {
+        warn!("Failed to set suggested prompts: {e}");
+    }
+
+    // 4. Clear status.
+    let _ =
+        api::set_thread_status(&state.bot_token, &thread.channel_id, &thread.thread_ts, "").await;
+}
+
+async fn generate_suggested_prompts(state: &Arc<SlackState>) -> Vec<api::SuggestedPrompt> {
+    use chrono::Timelike;
+
+    let pending = state.store.sqlite.count_pending_actions().unwrap_or(0);
+    let hour = chrono::Local::now().hour();
+
+    let mut prompts = Vec::new();
+
+    // Pending actions first if any.
+    if pending > 0 {
+        prompts.push(api::SuggestedPrompt {
+            title: format!(
+                "{pending} pending action{}",
+                if pending == 1 { "" } else { "s" }
+            ),
+            message: "Show me my pending actions".to_string(),
+        });
+    }
+
+    // Time-aware prompt.
+    if hour < 10 {
+        prompts.push(api::SuggestedPrompt {
+            title: "Morning briefing".to_string(),
+            message: "Give me my morning briefing \u{2014} schedule, emails, tasks".to_string(),
+        });
+    } else if hour >= 17 {
+        prompts.push(api::SuggestedPrompt {
+            title: "End of day recap".to_string(),
+            message: "Summarize what happened today and what's pending".to_string(),
+        });
+    } else {
+        prompts.push(api::SuggestedPrompt {
+            title: "What's on today?".to_string(),
+            message: "What's on my calendar today and any urgent emails?".to_string(),
+        });
+    }
+
+    // Always-useful prompts.
+    prompts.push(api::SuggestedPrompt {
+        title: "Next trains".to_string(),
+        message: "Next trains from Hastings-on-Hudson to Grand Central".to_string(),
+    });
+    prompts.push(api::SuggestedPrompt {
+        title: "Look someone up".to_string(),
+        message: "Who is [name] and what's our history?".to_string(),
+    });
+
+    // Trim to 4 max (Slack limit).
+    prompts.truncate(4);
+    prompts
 }
 
 /// Full chat with Izzie (DMs and @mentions).
