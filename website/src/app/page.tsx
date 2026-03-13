@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import { Github, Download, BookOpen, Lock, MessageCircle, Brain, ArrowRight } from 'lucide-react'
 
 const GITHUB_URL = 'https://github.com/bobmatnyc/trusty-izzie'
@@ -11,7 +12,8 @@ export default function HomePage() {
       {/* ── Nav ── */}
       <header className="sticky top-0 z-50 bg-slate-900 border-b border-slate-800">
         <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
+            <Image src="/favicon.png" alt="Izzie" width={28} height={28} className="rounded-md" />
             <span className="text-white font-semibold tracking-tight text-base">Izzie</span>
             <span className="hidden sm:inline text-slate-500 text-xs font-mono border border-slate-700 rounded px-1.5 py-0.5">
               open source
@@ -46,9 +48,12 @@ export default function HomePage() {
       <section className="bg-slate-900 text-white">
         <div className="max-w-5xl mx-auto px-6 py-20 md:py-28">
           <div className="max-w-2xl">
-            <div className="mb-5 inline-flex items-center gap-2 text-xs font-mono text-slate-400 border border-slate-700 rounded-full px-3 py-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              MIT licensed · Rust · macOS
+            <div className="flex items-center gap-4 mb-6">
+              <Image src="/favicon.png" alt="Izzie" width={56} height={56} className="rounded-2xl shadow-lg shadow-black/30" />
+              <div className="inline-flex items-center gap-2 text-xs font-mono text-slate-400 border border-slate-700 rounded-full px-3 py-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                MIT licensed · Rust · macOS
+              </div>
             </div>
             <h1 className="text-4xl md:text-5xl font-bold leading-tight tracking-tight mb-5">
               Your AI assistant that<br />actually knows you
