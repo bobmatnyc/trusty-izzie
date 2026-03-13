@@ -6,7 +6,7 @@
   import { invoke } from '@tauri-apps/api/core'
 
   type Tab = 'chat' | 'health' | 'skills' | 'settings'
-  let activeTab = $state<Tab>('chat')
+  let activeTab = $state<Tab>('health')
   let daemonRunning = $state(false)
 
   async function checkDaemon() {
