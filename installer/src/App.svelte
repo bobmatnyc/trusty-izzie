@@ -1,13 +1,35 @@
 <script lang="ts">
   import Welcome from './steps/Welcome.svelte'
-  import ApiKey from './steps/ApiKey.svelte'
-  import Installing from './steps/Installing.svelte'
+  import LlmBackend from './steps/LlmBackend.svelte'
+  import SlackSetup from './steps/SlackSetup.svelte'
   import GoogleOAuth from './steps/GoogleOAuth.svelte'
+  import SkillsSelect from './steps/SkillsSelect.svelte'
+  import Installing from './steps/Installing.svelte'
   import Done from './steps/Done.svelte'
+  import type { LlmConfig } from './steps/LlmBackend.svelte'
+  import type { SlackConfig } from './steps/SlackSetup.svelte'
+  import type { SkillsConfig } from './steps/SkillsSelect.svelte'
+
+  export type InstallerState = {
+    llm: LlmConfig
+    slack: SlackConfig
+    googleEmail: string | null
+    skills: SkillsConfig
+  }
 
   let step = $state(0)
-  const steps = [Welcome, ApiKey, Installing, GoogleOAuth, Done]
-  const CurrentStep = $derived(steps[step])
+
+  let state = $state<InstallerState>({
+    llm: { provider: 'openrouter', apiKey: '' },
+    slack: { mode: 'skip' },
+    googleEmail: null,
+    skills: { metroNorth: false, imessage: true, tavily: false, slackSearch: false },
+  })
+
+  const STEP_COUNT = 7
+
+  function next() { step++ }
+  function back() { step-- }
 </script>
 
 <main class="installer">
@@ -17,13 +39,44 @@
       <span class="logo-text">Izzie Installer</span>
     </div>
     <div class="step-indicator">
-      {#each steps as _, i}
+      {#each { length: STEP_COUNT } as _, i}
         <div class="dot" class:active={i === step} class:done={i < step}></div>
       {/each}
     </div>
   </header>
 
-  <CurrentStep onNext={() => step++} onBack={() => step--} />
+  {#if step === 0}
+    <Welcome onNext={next} />
+  {:else if step === 1}
+    <LlmBackend
+      onNext={next}
+      onBack={back}
+      onUpdate={(cfg) => (state.llm = cfg)}
+    />
+  {:else if step === 2}
+    <SlackSetup
+      onNext={next}
+      onBack={back}
+      onUpdate={(cfg) => (state.slack = cfg)}
+    />
+  {:else if step === 3}
+    <GoogleOAuth
+      onNext={next}
+      onBack={back}
+      onUpdate={(email) => (state.googleEmail = email)}
+    />
+  {:else if step === 4}
+    <SkillsSelect
+      onNext={next}
+      onBack={back}
+      onUpdate={(cfg) => (state.skills = cfg)}
+      slackConfig={state.slack}
+    />
+  {:else if step === 5}
+    <Installing onNext={next} config={state} />
+  {:else if step === 6}
+    <Done config={state} />
+  {/if}
 </main>
 
 <style>

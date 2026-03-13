@@ -4,7 +4,7 @@
 
 <div class="step">
   <div class="hero">
-    <div class="icon">✦</div>
+    <img src="/favicon.png" width="72" height="72" alt="Izzie" class="icon" />
     <h1>Welcome to Izzie</h1>
     <p>Your personal AI assistant, running entirely on your Mac.<br/>This installer will set everything up in a few minutes.</p>
     <button onclick={onNext}>Get Started →</button>
@@ -25,13 +25,7 @@
     align-items: center;
     gap: 16px;
   }
-  .icon {
-    width: 64px; height: 64px;
-    background: linear-gradient(135deg, #2563eb, #4f46e5);
-    border-radius: 16px;
-    display: flex; align-items: center; justify-content: center;
-    color: white; font-size: 28px;
-  }
+  .icon { border-radius: 16px; }
   h1 { font-size: 28px; font-weight: 700; color: #111; }
   p { color: #6b7280; line-height: 1.6; }
   button {
