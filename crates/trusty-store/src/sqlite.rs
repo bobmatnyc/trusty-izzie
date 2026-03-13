@@ -14,6 +14,18 @@ use trusty_models::{AgentTask, EventPayload, EventStatus, EventType, QueuedEvent
 ///
 /// The inner `Mutex` serialises access because `rusqlite::Connection` is not `Send`.
 /// For high-write workloads consider migrating to `tokio-rusqlite`.
+/// A queued action awaiting user approval.
+#[derive(Debug, Clone)]
+pub struct PendingAction {
+    pub id: String,
+    pub action_type: String,
+    pub description: String,
+    pub payload: String,
+    pub status: String,
+    pub result: Option<String>,
+    pub proposed_at: i64,
+}
+
 pub struct SqliteStore {
     conn: Mutex<Connection>,
 }
@@ -188,6 +200,20 @@ impl SqliteStore {
                 created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
                 is_active   INTEGER NOT NULL DEFAULT 1
             );
+
+            CREATE TABLE IF NOT EXISTS pending_actions (
+                id           TEXT PRIMARY KEY,
+                action_type  TEXT NOT NULL,
+                description  TEXT NOT NULL,
+                payload      TEXT NOT NULL DEFAULT '{}',
+                status       TEXT NOT NULL DEFAULT 'pending'
+                             CHECK(status IN ('pending','approved','rejected','executed','failed')),
+                result       TEXT,
+                proposed_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+                resolved_at  INTEGER,
+                source       TEXT NOT NULL DEFAULT 'chat'
+            );
+            CREATE INDEX IF NOT EXISTS idx_pa_status ON pending_actions(status, proposed_at DESC);
             "#,
         )?;
 
@@ -1349,8 +1375,118 @@ impl SqliteStore {
             .optional()?;
         Ok(result.map(|v| v != 0).unwrap_or(false))
     }
-}
 
+    // ── Pending Actions ─────────────────────────────────────────────────────
+
+    /// Queue a new action awaiting user approval.
+    pub fn queue_action(
+        &self,
+        action_type: &str,
+        description: &str,
+        payload: &serde_json::Value,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        conn.execute(
+            "INSERT INTO pending_actions (id, action_type, description, payload) VALUES (?1,?2,?3,?4)",
+            rusqlite::params![id, action_type, description, payload.to_string()],
+        )?;
+        Ok(id)
+    }
+
+    /// List pending (unresolved) actions.
+    pub fn list_pending_actions(&self) -> Result<Vec<PendingAction>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, action_type, description, payload, status, result, proposed_at              FROM pending_actions WHERE status='pending' ORDER BY proposed_at DESC LIMIT 20",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PendingAction {
+                id: row.get(0)?,
+                action_type: row.get(1)?,
+                description: row.get(2)?,
+                payload: row.get(3)?,
+                status: row.get(4)?,
+                result: row.get(5)?,
+                proposed_at: row.get(6)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Approve a pending action. Returns the action payload for execution.
+    pub fn approve_action(&self, id: &str) -> Result<Option<PendingAction>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        conn.execute(
+            "UPDATE pending_actions SET status='approved', resolved_at=unixepoch() WHERE id=?1 AND status='pending'",
+            rusqlite::params![id],
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT id, action_type, description, payload, status, result, proposed_at              FROM pending_actions WHERE id=?1",
+        )?;
+        Ok(stmt
+            .query_row(rusqlite::params![id], |row| {
+                Ok(PendingAction {
+                    id: row.get(0)?,
+                    action_type: row.get(1)?,
+                    description: row.get(2)?,
+                    payload: row.get(3)?,
+                    status: row.get(4)?,
+                    result: row.get(5)?,
+                    proposed_at: row.get(6)?,
+                })
+            })
+            .optional()?)
+    }
+
+    /// Reject a pending action.
+    pub fn reject_action(&self, id: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        conn.execute(
+            "UPDATE pending_actions SET status='rejected', resolved_at=unixepoch() WHERE id=?1",
+            rusqlite::params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark an approved action as executed with a result.
+    pub fn mark_action_executed(&self, id: &str, result: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        conn.execute(
+            "UPDATE pending_actions SET status='executed', result=?2, resolved_at=unixepoch() WHERE id=?1",
+            rusqlite::params![id, result],
+        )?;
+        Ok(())
+    }
+
+    /// Mark an action as failed.
+    pub fn mark_action_failed(&self, id: &str, error: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        conn.execute(
+            "UPDATE pending_actions SET status='failed', result=?2, resolved_at=unixepoch() WHERE id=?1",
+            rusqlite::params![id, error],
+        )?;
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

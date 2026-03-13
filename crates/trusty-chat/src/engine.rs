@@ -241,6 +241,14 @@ impl ChatEngine {
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}")),
             ToolName::CreateSkill => self.tool_create_skill(input).await,
+            ToolName::SendEmail => self.tool_send_email(input).await,
+            ToolName::ReplyEmail => self.tool_reply_email(input).await,
+            ToolName::CreateTask => self.tool_create_task(input).await,
+            ToolName::SearchSlack => self.tool_search_slack(input).await,
+            ToolName::SearchAll => self.tool_search_all(input).await,
+            ToolName::ListPendingActions => self.tool_list_pending_actions(),
+            ToolName::ApproveAction => self.tool_approve_action(input).await,
+            ToolName::RejectAction => self.tool_reject_action(input),
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -2481,6 +2489,10 @@ I can check my own service status with `check_service_status`, report my version
 - **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
 - **Weather**: I fetch real-time forecasts via `get_weather` (Open-Meteo, no API key) and active NWS severe weather alerts via `get_weather_alerts`. Default location is Hastings-on-Hudson, NY.
 - **Web Search**: I can search the web in real time via `web_search` (Brave Search API). Use this for current events, news, prices, and any information that may have changed since my training cutoff.
+- **Unified Search**: Use `search_all` to search across ALL sources simultaneously — memories, iMessage, Slack, calendar, tasks, and web — in a single call.
+- **Email drafting**: I can draft emails and replies on your behalf using `send_email` / `reply_email`. All emails go into an approval queue — I show you the draft and wait for `approve <id>` before sending.
+- **Task creation**: I can create Google Tasks directly via `create_task` (no approval needed).
+- **Slack search**: I can search Slack channels and workspace messages via `search_slack`.
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
@@ -2520,6 +2532,28 @@ I can check my own service status with `check_service_status`, report my version
 - `web_search`: Search the web using Brave Search. Required: query (string). Optional: count (default 5, max 10). Returns titles, descriptions, and URLs of top results.
 - `fetch_page`: Fetch and read the text content of a URL. Required: url (string). Optional: max_chars (default 3000, max 8000). Use after web_search to get full article/review content.
 - `create_skill`: Design and build a new skill. Uses Opus to architect the skill spec and Sonnet to write the Python implementation. Required: name (kebab-case, e.g. "hacker-news"), description (plain English — what it fetches, which APIs, etc.). The skill is available on the next turn.
+
+## Acting on Your Behalf (Search + Act)
+
+I can search across all your data and act on your behalf — with your approval for sensitive actions.
+
+### Search
+- `search_all`: Unified search across ALL sources at once — memories, iMessage, Slack, calendar, tasks, and web. Required: query. Optional: sources (array of "memories","entities","imessage","slack","calendar","tasks","web" — defaults to all). Returns labeled results from each source.
+- `search_slack`: Search Slack messages. Required: query. Optional: channel_id (specific channel via bot token), limit (default 10). With user token, also does workspace-wide search.
+
+### Email Actions (require approval)
+- `send_email`: Draft a new email for your approval. Required: account_email, to (array of addresses), subject, body. Optional: cc. Returns an approval prompt — confirm with `approve <id>`.
+- `reply_email`: Draft a reply for your approval. Required: account_email, thread_id, to, subject, body. Returns an approval prompt — confirm with `approve <id>`.
+
+### Task Actions
+- `create_task`: Create a new Google Task immediately (no approval required). Required: account_email, title. Optional: task_list_id (default: primary list), notes, due (RFC3339 date string).
+
+### Approval Queue
+- `list_pending_actions`: Show all actions waiting for your approval with their short IDs.
+- `approve_action`: Execute an approved action. Required: id (full UUID or short prefix, e.g. "a3f2"). Runs the action and reports success/failure.
+- `reject_action`: Discard a pending action. Required: id (full UUID or short prefix).
+
+**Approval workflow**: When I draft an email or other sensitive action, I return a prompt with a short ID. You confirm with `approve <id>` or `reject <id>`. You can also say "yes", "send it", or "go ahead" — I'll look up and approve the most recent pending action.
 
 ## Proactive Features
 I proactively send you briefings and updates. You can customize these:
@@ -2758,6 +2792,578 @@ fn clean_reply(reply: &str) -> String {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Email: send + reply
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl ChatEngine {
+    /// Queue an email to send for user approval, or send immediately if auto-approved.
+    ///
+    /// Parameters: account_email?, to, subject, body, cc?, bcc?, reply_to_thread_id?
+    async fn tool_send_email(&self, input: &serde_json::Value) -> Result<String> {
+        let primary =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
+        let email = input["account_email"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&primary);
+
+        let to = match input["to"].as_str().filter(|s| !s.is_empty()) {
+            Some(t) => t,
+            None => return Ok("Missing required parameter: to".into()),
+        };
+        let subject = input["subject"].as_str().unwrap_or("(no subject)");
+        let body = match input["body"].as_str().filter(|s| !s.is_empty()) {
+            Some(b) => b,
+            None => return Ok("Missing required parameter: body".into()),
+        };
+        let cc = input["cc"].as_str().unwrap_or("");
+
+        let description = format!("Send email to {to}: \"{subject}\"");
+        let payload = serde_json::json!({
+            "account_email": email,
+            "to": to,
+            "subject": subject,
+            "body": body,
+            "cc": cc,
+        });
+
+        let sqlite = self.sqlite_ref()?;
+        let action_id = sqlite.queue_action("send_email", &description, &payload)?;
+
+        Ok(format!(
+            "📧 Queued for your approval (action ID: {action_id}).\n\
+            **To**: {to}\n**Subject**: {subject}\n\n{body}\n\n\
+            Reply `approve {action_id}` to send, or `reject {action_id}` to cancel."
+        ))
+    }
+
+    /// Queue a reply to an existing Gmail thread.
+    ///
+    /// Parameters: account_email?, thread_id, message_id, to, subject, body
+    async fn tool_reply_email(&self, input: &serde_json::Value) -> Result<String> {
+        let primary =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
+        let email = input["account_email"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&primary);
+
+        let thread_id = match input["thread_id"].as_str().filter(|s| !s.is_empty()) {
+            Some(t) => t,
+            None => return Ok("Missing required parameter: thread_id".into()),
+        };
+        let to = match input["to"].as_str().filter(|s| !s.is_empty()) {
+            Some(t) => t,
+            None => return Ok("Missing required parameter: to".into()),
+        };
+        let subject = input["subject"].as_str().unwrap_or("Re: (no subject)");
+        let body = match input["body"].as_str().filter(|s| !s.is_empty()) {
+            Some(b) => b,
+            None => return Ok("Missing required parameter: body".into()),
+        };
+        let in_reply_to = input["message_id"].as_str().unwrap_or("");
+
+        let description = format!("Reply to thread {thread_id} → {to}: \"{subject}\"");
+        let payload = serde_json::json!({
+            "account_email": email,
+            "thread_id": thread_id,
+            "message_id": in_reply_to,
+            "to": to,
+            "subject": subject,
+            "body": body,
+        });
+
+        let sqlite = self.sqlite_ref()?;
+        let action_id = sqlite.queue_action("reply_email", &description, &payload)?;
+
+        Ok(format!(
+            "📧 Reply queued for your approval (action ID: {action_id}).\n\
+            **To**: {to}\n**Subject**: {subject}\n\n{body}\n\n\
+            Reply `approve {action_id}` to send, or `reject {action_id}` to cancel."
+        ))
+    }
+
+    /// Actually send an email via Gmail API (called after user approves).
+    pub async fn execute_send_email(&self, payload: &serde_json::Value) -> Result<String> {
+        let primary =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
+        let email = payload["account_email"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&primary);
+
+        let access_token = self.get_valid_token(email).await?;
+
+        let to = payload["to"].as_str().unwrap_or("");
+        let subject = payload["subject"].as_str().unwrap_or("(no subject)");
+        let body = payload["body"].as_str().unwrap_or("");
+        let cc = payload["cc"].as_str().unwrap_or("");
+        let thread_id = payload["thread_id"].as_str();
+        let in_reply_to = payload["message_id"].as_str();
+
+        // Build RFC 2822 message
+        let mut raw = format!(
+            "From: {email}\r\nTo: {to}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n"
+        );
+        if !cc.is_empty() {
+            raw.push_str(&format!("Cc: {cc}\r\n"));
+        }
+        if let Some(msg_id) = in_reply_to {
+            if !msg_id.is_empty() {
+                raw.push_str(&format!(
+                    "In-Reply-To: {msg_id}\r\nReferences: {msg_id}\r\n"
+                ));
+            }
+        }
+        raw.push_str(&format!("\r\n{body}"));
+
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let encoded = URL_SAFE_NO_PAD.encode(raw.as_bytes());
+
+        let mut req_body = serde_json::json!({ "raw": encoded });
+        if let Some(tid) = thread_id {
+            if !tid.is_empty() {
+                req_body["threadId"] = serde_json::Value::String(tid.to_string());
+            }
+        }
+
+        let resp = self
+            .http
+            .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+            .bearer_auth(&access_token)
+            .json(&req_body)
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let msg_id = body["id"].as_str().unwrap_or("unknown");
+            Ok(format!("Email sent (message ID: {msg_id})"))
+        } else {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
+            Err(anyhow::anyhow!("Gmail send failed: {msg}"))
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tasks: create
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl ChatEngine {
+    /// Create a new task in a Google Task list.
+    ///
+    /// Parameters: account_email?, task_list_id, title, notes?, due?
+    async fn tool_create_task(&self, input: &serde_json::Value) -> Result<String> {
+        let primary =
+            std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
+        let email = input["account_email"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&primary);
+        let access_token = match self.get_valid_token(email).await {
+            Ok(t) => t,
+            Err(e) => return Ok(format!("Cannot access Tasks for {email}: {e}")),
+        };
+
+        let task_list_id = match input["task_list_id"].as_str().filter(|s| !s.is_empty()) {
+            Some(id) => id,
+            None => {
+                return Ok(
+                    "Missing required parameter: task_list_id (use get_task_lists to find it)"
+                        .into(),
+                )
+            }
+        };
+        let title = match input["title"].as_str().filter(|s| !s.is_empty()) {
+            Some(t) => t,
+            None => return Ok("Missing required parameter: title".into()),
+        };
+
+        let mut body = serde_json::json!({ "title": title });
+        if let Some(notes) = input["notes"].as_str().filter(|s| !s.is_empty()) {
+            body["notes"] = serde_json::Value::String(notes.to_string());
+        }
+        if let Some(due) = input["due"].as_str().filter(|s| !s.is_empty()) {
+            // due must be RFC 3339 format; append T00:00:00.000Z if only date given
+            let due_formatted = if due.contains('T') {
+                due.to_string()
+            } else {
+                format!("{due}T00:00:00.000Z")
+            };
+            body["due"] = serde_json::Value::String(due_formatted);
+        }
+
+        let url = format!(
+            "https://tasks.googleapis.com/tasks/v1/lists/{}/tasks",
+            task_list_id
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&access_token)
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if status.is_success() {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let task_id = body["id"].as_str().unwrap_or("unknown");
+            Ok(format!("✅ Task created: \"{title}\" (ID: {task_id})"))
+        } else {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
+            Ok(format!("Failed to create task (HTTP {status}): {msg}"))
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Slack search
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl ChatEngine {
+    /// Search Slack channel/DM history by keyword.
+    ///
+    /// Parameters: query, channel_id?, limit?
+    async fn tool_search_slack(&self, input: &serde_json::Value) -> Result<String> {
+        let token = match std::env::var("SLACK_BOT_TOKEN").ok() {
+            Some(t) => t,
+            None => return Ok("SLACK_BOT_TOKEN not configured.".into()),
+        };
+        let query = match input["query"].as_str().filter(|s| !s.is_empty()) {
+            Some(q) => q,
+            None => return Ok("Missing required parameter: query".into()),
+        };
+        let channel = input["channel_id"].as_str().unwrap_or("");
+        let limit = input["limit"].as_u64().unwrap_or(20).min(100);
+
+        // Use conversations.history for a specific channel, or search.messages for workspace-wide
+        if !channel.is_empty() {
+            // Channel-specific: fetch recent messages and filter by query
+            let resp: serde_json::Value = self
+                .http
+                .get("https://slack.com/api/conversations.history")
+                .bearer_auth(&token)
+                .query(&[("channel", channel), ("limit", &limit.to_string())])
+                .send()
+                .await?
+                .json()
+                .await?;
+
+            if !resp["ok"].as_bool().unwrap_or(false) {
+                let err = resp["error"].as_str().unwrap_or("unknown");
+                return Ok(format!(
+                    "Slack API error: {err}. Check channels:history scope."
+                ));
+            }
+
+            let messages = resp["messages"].as_array().cloned().unwrap_or_default();
+            let query_lower = query.to_lowercase();
+            let matches: Vec<String> = messages
+                .iter()
+                .filter(|m| {
+                    m["text"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&query_lower)
+                })
+                .take(10)
+                .map(|m| {
+                    let ts = m["ts"].as_str().unwrap_or("");
+                    let user = m["user"].as_str().unwrap_or("bot");
+                    let text = m["text"].as_str().unwrap_or("");
+                    let preview: String = text.chars().take(200).collect();
+                    format!("[{user} @ {ts}]: {preview}")
+                })
+                .collect();
+
+            if matches.is_empty() {
+                Ok(format!("No messages in <#{channel}> matching \"{query}\"."))
+            } else {
+                Ok(format!(
+                    "Found {} message(s) in <#{channel}> matching \"{query}\":\n{}",
+                    matches.len(),
+                    matches.join("\n")
+                ))
+            }
+        } else {
+            // Workspace-wide: use search.messages (requires search:read scope on user token)
+            let user_token = std::env::var("SLACK_USER_TOKEN").unwrap_or(token);
+            let resp: serde_json::Value = self
+                .http
+                .get("https://slack.com/api/search.messages")
+                .bearer_auth(&user_token)
+                .query(&[("query", query), ("count", &limit.to_string())])
+                .send()
+                .await?
+                .json()
+                .await?;
+
+            if !resp["ok"].as_bool().unwrap_or(false) {
+                let err = resp["error"].as_str().unwrap_or("unknown");
+                return Ok(format!(
+                    "Slack search error: {err}. Workspace-wide search requires search:read scope on user token."
+                ));
+            }
+
+            let matches = resp["messages"]["matches"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            if matches.is_empty() {
+                return Ok(format!("No Slack messages found matching \"{query}\"."));
+            }
+
+            let results: Vec<String> = matches
+                .iter()
+                .take(10)
+                .map(|m| {
+                    let channel_name = m["channel"]["name"].as_str().unwrap_or("unknown");
+                    let user = m["username"].as_str().unwrap_or("unknown");
+                    let text = m["text"].as_str().unwrap_or("");
+                    let preview: String = text.chars().take(200).collect();
+                    format!("#{channel_name} [{user}]: {preview}")
+                })
+                .collect();
+
+            Ok(format!(
+                "Found {} Slack message(s) for \"{query}\":\n{}",
+                results.len(),
+                results.join("\n")
+            ))
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Unified search_all
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl ChatEngine {
+    /// Fan-out search across all personal data + web, RRF-merge results.
+    ///
+    /// Parameters: query, sources? (array of: "memories","entities","imessage","slack","calendar","tasks","web")
+    async fn tool_search_all(&self, input: &serde_json::Value) -> Result<String> {
+        let query = match input["query"].as_str().filter(|s| !s.is_empty()) {
+            Some(q) => q,
+            None => return Ok("Missing required parameter: query".into()),
+        };
+
+        // Determine which sources to query
+        let all_sources = [
+            "memories", "entities", "imessage", "slack", "calendar", "tasks", "web",
+        ];
+        let requested: Vec<&str> = if let Some(arr) = input["sources"].as_array() {
+            arr.iter().filter_map(|v| v.as_str()).collect()
+        } else {
+            all_sources.to_vec()
+        };
+
+        let mut sections: Vec<String> = Vec::new();
+
+        // Run all sources concurrently — call concrete methods directly to avoid async recursion
+        let web_query = serde_json::json!({"query": query});
+        let imsg_query = serde_json::json!({"query": query, "limit": 5});
+        let slack_query = serde_json::json!({"query": query, "limit": 10});
+
+        let (web_r, imsg_r) = tokio::join!(
+            async {
+                if requested.contains(&"web") {
+                    self.tool_web_search(&web_query).await.ok()
+                } else {
+                    None
+                }
+            },
+            async {
+                if requested.contains(&"imessage") {
+                    self.tool_search_imessages(&imsg_query).ok()
+                } else {
+                    None
+                }
+            },
+        );
+
+        let (slack_r, tasks_r) = tokio::join!(
+            async {
+                if requested.contains(&"slack") {
+                    self.tool_search_slack(&slack_query).await.ok()
+                } else {
+                    None
+                }
+            },
+            async {
+                if requested.contains(&"tasks") {
+                    let primary = std::env::var("TRUSTY_PRIMARY_EMAIL")
+                        .unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
+                    self.tool_get_tasks_bulk(&serde_json::json!({"account_email": primary}))
+                        .await
+                        .ok()
+                } else {
+                    None
+                }
+            },
+        );
+
+        // Placeholders for memory/entity search (not yet implemented at store level)
+        let mem_r: Option<String> = None;
+        let entity_r: Option<String> = None;
+
+        // Collect non-empty results with source labels
+        if let Some(r) = mem_r {
+            if !r.contains("No memories") && !r.is_empty() {
+                sections.push(format!("**Memories:**\n{r}"));
+            }
+        }
+        if let Some(r) = entity_r {
+            if !r.contains("No entities") && !r.is_empty() {
+                sections.push(format!("**Entities:**\n{r}"));
+            }
+        }
+        if let Some(r) = imsg_r {
+            if !r.contains("No messages") && !r.is_empty() {
+                sections.push(format!("**iMessage:**\n{r}"));
+            }
+        }
+        if let Some(r) = slack_r {
+            if !r.contains("No Slack") && !r.is_empty() {
+                sections.push(format!("**Slack:**\n{r}"));
+            }
+        }
+        if let Some(r) = tasks_r {
+            if !r.is_empty() {
+                sections.push(format!("**Tasks:**\n{r}"));
+            }
+        }
+        if let Some(r) = web_r {
+            if !r.is_empty() {
+                sections.push(format!("**Web:**\n{r}"));
+            }
+        }
+
+        if sections.is_empty() {
+            Ok(format!(
+                "No results found across any source for \"{query}\"."
+            ))
+        } else {
+            Ok(format!(
+                "Search results for \"{query}\" ({} source{}):\n\n{}",
+                sections.len(),
+                if sections.len() == 1 { "" } else { "s" },
+                sections.join("\n\n---\n\n")
+            ))
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Pending actions approval queue
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl ChatEngine {
+    fn tool_list_pending_actions(&self) -> Result<String> {
+        let sqlite = self.sqlite_ref()?;
+        let actions = sqlite.list_pending_actions()?;
+        if actions.is_empty() {
+            return Ok("No pending actions.".into());
+        }
+        let lines: Vec<String> = actions
+            .iter()
+            .map(|a| {
+                format!(
+                    "• **[{}]** `{}` — {}\n  _(queued {})_",
+                    a.id.split('-').next().unwrap_or(&a.id),
+                    a.action_type,
+                    a.description,
+                    chrono::DateTime::from_timestamp(a.proposed_at, 0)
+                        .map(|dt: chrono::DateTime<chrono::Utc>| dt
+                            .format("%Y-%m-%d %H:%M")
+                            .to_string())
+                        .unwrap_or_else(|| a.proposed_at.to_string())
+                )
+            })
+            .collect();
+        Ok(format!(
+            "**{} pending action{}:**\n{}\n\nReply `approve <id>` or `reject <id>`.",
+            actions.len(),
+            if actions.len() == 1 { "" } else { "s" },
+            lines.join("\n")
+        ))
+    }
+
+    async fn tool_approve_action(&self, input: &serde_json::Value) -> Result<String> {
+        let id = match input["id"].as_str().filter(|s| !s.is_empty()) {
+            Some(i) => i,
+            None => return Ok("Missing required parameter: id".into()),
+        };
+
+        let sqlite = self.sqlite_ref()?;
+
+        // Support short IDs (first segment of UUID)
+        let full_id = if id.len() < 36 {
+            let actions = sqlite.list_pending_actions()?;
+            actions
+                .iter()
+                .find(|a| a.id.starts_with(id))
+                .map(|a| a.id.clone())
+                .unwrap_or_else(|| id.to_string())
+        } else {
+            id.to_string()
+        };
+
+        let action = match sqlite.approve_action(&full_id)? {
+            Some(a) => a,
+            None => return Ok(format!("Action {id} not found or already resolved.")),
+        };
+
+        // Execute the action
+        let payload: serde_json::Value = serde_json::from_str(&action.payload).unwrap_or_default();
+
+        let result = match action.action_type.as_str() {
+            "send_email" | "reply_email" => self.execute_send_email(&payload).await,
+            other => Err(anyhow::anyhow!("Unknown action type: {other}")),
+        };
+
+        match result {
+            Ok(msg) => {
+                sqlite.mark_action_executed(&full_id, &msg)?;
+                Ok(format!("✅ {msg}"))
+            }
+            Err(e) => {
+                sqlite.mark_action_failed(&full_id, &e.to_string())?;
+                Ok(format!("❌ Action failed: {e}"))
+            }
+        }
+    }
+
+    fn tool_reject_action(&self, input: &serde_json::Value) -> Result<String> {
+        let id = match input["id"].as_str().filter(|s| !s.is_empty()) {
+            Some(i) => i,
+            None => return Ok("Missing required parameter: id".into()),
+        };
+
+        let sqlite = self.sqlite_ref()?;
+
+        let full_id = if id.len() < 36 {
+            let actions = sqlite.list_pending_actions()?;
+            actions
+                .iter()
+                .find(|a| a.id.starts_with(id))
+                .map(|a| a.id.clone())
+                .unwrap_or_else(|| id.to_string())
+        } else {
+            id.to_string()
+        };
+
+        sqlite.reject_action(&full_id)?;
+        Ok(format!("❌ Action {id} rejected and discarded."))
+    }
+}
 
 #[cfg(test)]
 mod tests {

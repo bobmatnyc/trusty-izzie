@@ -110,6 +110,22 @@ pub enum ToolName {
     GetWeatherAlerts,
     /// Design and build a new skill using Opus (design) and Sonnet (implementation).
     CreateSkill,
+    /// Send a new email via Gmail on behalf of the user.
+    SendEmail,
+    /// Reply to an existing Gmail thread on behalf of the user.
+    ReplyEmail,
+    /// Create a new task in a Google Task list.
+    CreateTask,
+    /// Search Slack channel/DM history by keyword.
+    SearchSlack,
+    /// Unified search across all personal data + web (memories, email, iMessage, Slack, calendar, tasks, web).
+    SearchAll,
+    /// List pending actions awaiting user approval.
+    ListPendingActions,
+    /// Approve a pending action by ID (executes it immediately).
+    ApproveAction,
+    /// Reject a pending action by ID.
+    RejectAction,
 }
 
 /// A parsed tool call request from the LLM.
