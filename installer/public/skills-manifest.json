@@ -1,0 +1,159 @@
+{
+  "bundled": [
+    {
+      "id": "web_search",
+      "name": "Web Search",
+      "description": "Search the web via Brave Search API",
+      "keys": [
+        {
+          "env": "BRAVE_API_KEY",
+          "label": "Brave Search API Key",
+          "placeholder": "BSA...",
+          "required": true,
+          "url": "https://api.search.brave.com/",
+          "urlLabel": "Get a free key at brave.com/search/api →"
+        }
+      ]
+    },
+    {
+      "id": "weather",
+      "name": "Weather",
+      "description": "Current conditions and forecasts via Open-Meteo (no key required)",
+      "keys": []
+    },
+    {
+      "id": "calendar",
+      "name": "Calendar & Tasks",
+      "description": "Read and create Google Calendar events and Tasks",
+      "keys": []
+    },
+    {
+      "id": "email",
+      "name": "Email",
+      "description": "Search sent mail, compose and send (with your approval)",
+      "keys": []
+    },
+    {
+      "id": "memory",
+      "name": "Memory & Contacts",
+      "description": "Search your knowledge graph of people, companies, and projects",
+      "keys": []
+    },
+    {
+      "id": "briefing",
+      "name": "Morning Briefing",
+      "description": "Daily digest of calendar, tasks, open actions, and news",
+      "keys": []
+    }
+  ],
+  "optional": [
+    {
+      "id": "metro_north",
+      "name": "Metro North Trains",
+      "description": "Live MTA train schedules and track assignments at Grand Central",
+      "tags": ["Regional", "NYC"],
+      "keys": []
+    },
+    {
+      "id": "imessage",
+      "name": "iMessage Search",
+      "description": "Search your Messages app conversations",
+      "tags": ["macOS"],
+      "keys": []
+    },
+    {
+      "id": "tavily",
+      "name": "Tavily Search",
+      "description": "Enhanced web research with full-page answers and citations",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "TAVILY_API_KEY",
+          "label": "Tavily API Key",
+          "placeholder": "tvly-...",
+          "required": true,
+          "url": "https://tavily.com",
+          "urlLabel": "Get a key at tavily.com →"
+        }
+      ]
+    },
+    {
+      "id": "slack_search",
+      "name": "Slack Search",
+      "description": "Search Slack messages and channel history",
+      "tags": ["Requires Slack"],
+      "keys": []
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "description": "Search repos, issues, PRs, and code across your organizations",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "GITHUB_TOKEN",
+          "label": "GitHub Personal Access Token",
+          "placeholder": "ghp_...",
+          "required": true,
+          "url": "https://github.com/settings/tokens",
+          "urlLabel": "Create a token at github.com/settings/tokens →",
+          "scopes": "repo, read:org"
+        }
+      ]
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "description": "Query issues, cycles, and project status from Linear",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "LINEAR_API_KEY",
+          "label": "Linear API Key",
+          "placeholder": "lin_api_...",
+          "required": true,
+          "url": "https://linear.app/settings/api",
+          "urlLabel": "Get a key at linear.app/settings/api →"
+        }
+      ]
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "description": "Search and read pages from your Notion workspace",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "NOTION_API_KEY",
+          "label": "Notion Integration Token",
+          "placeholder": "secret_...",
+          "required": true,
+          "url": "https://www.notion.so/my-integrations",
+          "urlLabel": "Create an integration at notion.so/my-integrations →"
+        }
+      ]
+    },
+    {
+      "id": "spotify",
+      "name": "Spotify",
+      "description": "Control playback and search your music library",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "SPOTIFY_CLIENT_ID",
+          "label": "Spotify Client ID",
+          "placeholder": "abc123...",
+          "required": true,
+          "url": "https://developer.spotify.com/dashboard",
+          "urlLabel": "Create an app at developer.spotify.com →"
+        },
+        {
+          "env": "SPOTIFY_CLIENT_SECRET",
+          "label": "Spotify Client Secret",
+          "placeholder": "abc123...",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,49 +1,116 @@
 <script lang="ts">
   import type { SlackConfig } from './SlackSetup.svelte'
 
-  export type SkillsConfig = {
-    metroNorth: boolean
-    imessage: boolean
-    tavily: boolean
-    tavilyApiKey?: string
-    slackSearch: boolean
+  export type SkillKey = {
+    env: string
+    label: string
+    placeholder: string
+    required: boolean
+    url?: string
+    urlLabel?: string
+    scopes?: string
   }
 
-  let { onNext, onBack, onUpdate, slackConfig } = $props<{
+  export type SkillDef = {
+    id: string
+    name: string
+    description: string
+    tags?: string[]
+    keys: SkillKey[]
+  }
+
+  export type SkillsManifest = {
+    bundled: SkillDef[]
+    optional: SkillDef[]
+  }
+
+  export type SkillsConfig = {
+    enabled: string[]
+    keys: Record<string, string>  // env_var → value
+  }
+
+  let { onNext, onBack, onUpdate, slack } = $props<{
     onNext: () => void
     onBack: () => void
     onUpdate: (cfg: SkillsConfig) => void
-    slackConfig: SlackConfig
+    slack: SlackConfig
   }>()
 
-  let metroNorth = $state(false)
-  let imessage = $state(true)
-  let tavily = $state(false)
-  let tavilyApiKey = $state('')
-  let slackSearch = $state(slackConfig.mode !== 'skip')
+  let manifest = $state<SkillsManifest | null>(null)
+  let enabled = $state<Set<string>>(new Set())
+  let keyValues = $state<Record<string, string>>({})
+  let loadError = $state<string | null>(null)
 
-  // Keep slackSearch in sync if parent changes
+  // Load manifest on mount
   $effect(() => {
-    if (slackConfig.mode !== 'skip') slackSearch = true
+    fetch('/skills-manifest.json')
+      .then(r => r.json())
+      .then((m: SkillsManifest) => {
+        manifest = m
+
+        // Auto-enable all bundled skills
+        const defaults = new Set(m.bundled.map((s: SkillDef) => s.id))
+
+        // Auto-enable slack_search if Slack is configured
+        if (slack.mode !== 'skip') {
+          defaults.add('slack_search')
+        }
+
+        enabled = defaults
+      })
+      .catch((e: Error) => {
+        loadError = e.message
+      })
   })
 
-  const bundled = [
-    { label: 'Web search', desc: 'Search the web via Brave' },
-    { label: 'Weather', desc: 'Current conditions and forecasts' },
-    { label: 'Calendar & Tasks', desc: 'Read and create Google Calendar events and Tasks' },
-    { label: 'Email', desc: 'Search sent mail, compose and send (with approval)' },
-    { label: 'Memory search', desc: 'Search your contacts, companies, and projects' },
-    { label: 'Morning briefing', desc: 'Daily digest of calendar, tasks, and news' },
-  ]
+  function toggle(id: string) {
+    const next = new Set(enabled)
+    if (next.has(id)) {
+      next.delete(id)
+      // Clear keys for this skill
+      if (manifest) {
+        const skill = manifest.optional.find((s: SkillDef) => s.id === id)
+        if (skill) {
+          const nextKeys = { ...keyValues }
+          skill.keys.forEach((k: SkillKey) => delete nextKeys[k.env])
+          keyValues = nextKeys
+        }
+      }
+    } else {
+      next.add(id)
+    }
+    enabled = next
+  }
+
+  function setKey(env: string, value: string) {
+    keyValues = { ...keyValues, [env]: value }
+  }
+
+  function missingKeys(): string[] {
+    if (!manifest) return []
+    const missing: string[] = []
+    const allSkills = [...manifest.bundled, ...manifest.optional]
+    for (const skill of allSkills) {
+      if (enabled.has(skill.id)) {
+        for (const k of skill.keys) {
+          if (k.required && !keyValues[k.env]?.trim()) missing.push(k.env)
+        }
+      }
+    }
+    return missing
+  }
+
+  function canContinue() {
+    return manifest !== null && missingKeys().length === 0
+  }
 
   function handleNext() {
     const cfg: SkillsConfig = {
-      metroNorth,
-      imessage,
-      tavily,
-      slackSearch,
+      enabled: Array.from(enabled),
+      keys: Object.fromEntries(
+        Object.entries(keyValues).filter(([, v]) => v.trim().length > 0)
+      ),
     }
-    if (tavily && tavilyApiKey.trim()) cfg.tavilyApiKey = tavilyApiKey.trim()
     onUpdate(cfg)
     onNext()
   }
@@ -54,70 +121,122 @@
     <h2>Skills</h2>
     <p class="subtitle">Choose which capabilities to enable</p>
 
-    <div class="section">
-      <div class="section-title">Bundled</div>
-      {#each bundled as skill}
-        <div class="skill-row bundled">
-          <span class="check">✓</span>
-          <div>
-            <span class="skill-name">{skill.label}</span>
-            <span class="skill-desc"> — {skill.desc}</span>
-          </div>
-        </div>
-      {/each}
-    </div>
+    {#if loadError}
+      <div class="error">Failed to load skills: {loadError}</div>
+    {:else if !manifest}
+      <div class="loading">Loading skills...</div>
+    {:else}
 
-    <div class="section">
-      <div class="section-title">Optional</div>
+      <!-- Bundled skills -->
+      <section>
+        <div class="section-header">
+          <span class="section-title">Bundled</span>
+          <span class="section-note">always enabled</span>
+        </div>
+        <div class="skill-list">
+          {#each manifest.bundled as skill}
+            <div class="skill-row bundled">
+              <div class="skill-main">
+                <span class="check-icon">✓</span>
+                <div class="skill-info">
+                  <span class="skill-name">{skill.name}</span>
+                  <span class="skill-desc">{skill.description}</span>
+                </div>
+              </div>
+              {#if skill.keys.length > 0}
+                <div class="key-fields">
+                  {#each skill.keys as key}
+                    <div class="key-field">
+                      <label for="key-{key.env}">
+                        {key.label}
+                        {#if key.required}<span class="required">*</span>{/if}
+                      </label>
+                      <input
+                        id="key-{key.env}"
+                        type="password"
+                        placeholder={key.placeholder}
+                        value={keyValues[key.env] ?? ''}
+                        oninput={(e) => setKey(key.env, (e.target as HTMLInputElement).value)}
+                      />
+                      {#if key.url}
+                        <a href={key.url} target="_blank" class="key-link">{key.urlLabel ?? key.url}</a>
+                      {/if}
+                      {#if key.scopes}
+                        <span class="key-scopes">Required scopes: {key.scopes}</span>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </section>
 
-      <label class="skill-row optional">
-        <input type="checkbox" bind:checked={metroNorth} />
-        <div class="skill-info">
-          <span class="skill-name">Metro North trains</span>
-          <span class="skill-desc"> — MTA train schedules and live track assignments</span>
-          <span class="tag regional">Regional</span>
+      <!-- Optional skills -->
+      <section>
+        <div class="section-header">
+          <span class="section-title">Optional</span>
+          <span class="section-note">toggle on/off</span>
         </div>
-      </label>
+        <div class="skill-list">
+          {#each manifest.optional as skill}
+            {@const isEnabled = enabled.has(skill.id)}
+            <div class="skill-row optional" class:active={isEnabled}>
+              <div class="skill-main">
+                <input
+                  type="checkbox"
+                  id="skill-{skill.id}"
+                  checked={isEnabled}
+                  onchange={() => toggle(skill.id)}
+                />
+                <div class="skill-info">
+                  <label for="skill-{skill.id}" class="skill-name">{skill.name}</label>
+                  <span class="skill-desc">{skill.description}</span>
+                  {#if skill.tags?.length}
+                    <div class="tags">
+                      {#each skill.tags as tag}
+                        <span class="tag">{tag}</span>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+              {#if isEnabled && skill.keys.length > 0}
+                <div class="key-fields">
+                  {#each skill.keys as key}
+                    <div class="key-field">
+                      <label for="key-opt-{key.env}">
+                        {key.label}
+                        {#if key.required}<span class="required">*</span>{/if}
+                      </label>
+                      <input
+                        id="key-opt-{key.env}"
+                        type="password"
+                        placeholder={key.placeholder}
+                        value={keyValues[key.env] ?? ''}
+                        oninput={(e) => setKey(key.env, (e.target as HTMLInputElement).value)}
+                      />
+                      {#if key.url}
+                        <a href={key.url} target="_blank" class="key-link">{key.urlLabel ?? key.url}</a>
+                      {/if}
+                      {#if key.scopes}
+                        <span class="key-scopes">Required scopes: {key.scopes}</span>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </section>
 
-      <label class="skill-row optional">
-        <input type="checkbox" bind:checked={imessage} />
-        <div class="skill-info">
-          <span class="skill-name">iMessage search</span>
-          <span class="skill-desc"> — Search your Messages app (macOS only)</span>
-          <span class="tag macos">macOS</span>
-        </div>
-      </label>
-
-      <label class="skill-row optional">
-        <input type="checkbox" bind:checked={tavily} />
-        <div class="skill-info">
-          <span class="skill-name">Tavily search</span>
-          <span class="skill-desc"> — Enhanced web research with full-page answers</span>
-          <span class="tag apikey">API key required</span>
-        </div>
-      </label>
-      {#if tavily}
-        <div class="inline-field">
-          <input type="password" placeholder="Tavily API key" bind:value={tavilyApiKey} />
-        </div>
-      {/if}
-
-      <label class="skill-row optional" class:auto-enabled={slackConfig.mode !== 'skip'}>
-        <input type="checkbox" bind:checked={slackSearch} />
-        <div class="skill-info">
-          <span class="skill-name">Slack search</span>
-          <span class="skill-desc"> — Search Slack messages</span>
-          <span class="tag slack">Requires Slack</span>
-          {#if slackConfig.mode !== 'skip'}
-            <span class="auto-note">auto-enabled</span>
-          {/if}
-        </div>
-      </label>
-    </div>
+    {/if}
 
     <div class="actions">
       <button class="secondary" onclick={onBack}>← Back</button>
-      <button onclick={handleNext}>Continue →</button>
+      <button onclick={handleNext} disabled={!canContinue()}>Continue →</button>
     </div>
   </div>
 </div>
@@ -125,76 +244,104 @@
 <style>
   .step {
     flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 40px;
     overflow-y: auto;
+    padding: 32px 40px;
   }
   .content {
     width: 100%;
-    max-width: 520px;
+    max-width: 560px;
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 20px;
   }
   h2 { font-size: 22px; font-weight: 600; color: #111; margin: 0; }
   .subtitle { color: #6b7280; margin: 0; }
-  .section { display: flex; flex-direction: column; gap: 4px; }
-  .section-title {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #9ca3af;
-    margin-bottom: 8px;
+
+  .loading { color: #9ca3af; font-size: 14px; text-align: center; padding: 24px; }
+  .error { color: #dc2626; font-size: 13px; background: #fef2f2; padding: 12px; border-radius: 8px; }
+
+  section { display: flex; flex-direction: column; gap: 8px; }
+  .section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #f3f4f6;
   }
+  .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #374151; }
+  .section-note { font-size: 11px; color: #9ca3af; }
+
+  .skill-list { display: flex; flex-direction: column; gap: 4px; }
+
   .skill-row {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: white;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .skill-row.bundled { background: #f9fafb; }
+  .skill-row.optional.active {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+  }
+
+  .skill-main {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: white;
-    border: 1px solid #f3f4f6;
   }
-  .skill-row.bundled { cursor: default; }
-  .skill-row.optional { cursor: pointer; }
-  .skill-row.optional:hover { background: #f9fafb; }
-  .skill-row.auto-enabled { background: #eff6ff; border-color: #bfdbfe; }
-  .check { color: #10b981; font-weight: 700; font-size: 14px; flex-shrink: 0; padding-top: 1px; }
-  .skill-info { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-  .skill-name { font-weight: 500; color: #111; font-size: 14px; }
-  .skill-desc { color: #6b7280; font-size: 13px; }
+  .check-icon { color: #10b981; font-size: 14px; margin-top: 1px; flex-shrink: 0; }
+  input[type="checkbox"] { accent-color: #2563eb; margin-top: 2px; flex-shrink: 0; cursor: pointer; }
+
+  .skill-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+  .skill-name { font-size: 13px; font-weight: 600; color: #111; cursor: pointer; }
+  .skill-desc { font-size: 12px; color: #6b7280; line-height: 1.4; }
+
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
   .tag {
     font-size: 10px;
-    font-weight: 500;
     padding: 2px 7px;
-    border-radius: 10px;
-    flex-shrink: 0;
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: #6b7280;
+    border: 1px solid #e5e7eb;
   }
-  .tag.regional { background: #fef9c3; color: #854d0e; }
-  .tag.macos { background: #f3f4f6; color: #374151; }
-  .tag.apikey { background: #fef3c7; color: #92400e; }
-  .tag.slack { background: #ede9fe; color: #5b21b6; }
-  .auto-note { font-size: 11px; color: #2563eb; font-style: italic; }
-  input[type="checkbox"] { accent-color: #2563eb; width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; }
-  .inline-field { padding: 0 12px 8px 38px; }
-  .inline-field input {
+
+  .key-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 4px;
+    border-top: 1px solid #e5e7eb;
+  }
+  .key-field { display: flex; flex-direction: column; gap: 5px; }
+  .key-field label { font-size: 12px; font-weight: 500; color: #374151; }
+  .required { color: #dc2626; margin-left: 2px; }
+  .key-link { font-size: 11px; color: #2563eb; text-decoration: none; }
+  .key-link:hover { text-decoration: underline; }
+  .key-scopes { font-size: 11px; color: #9ca3af; font-style: italic; }
+
+  input[type="password"] {
     border: 1px solid #d1d5db;
-    border-radius: 8px;
+    border-radius: 7px;
     padding: 8px 12px;
-    font-size: 13px;
-    font-family: inherit;
+    font-size: 12px;
+    font-family: monospace;
     width: 100%;
     box-sizing: border-box;
   }
-  .inline-field input:focus {
+  input[type="password"]:focus {
     outline: none;
     border-color: #2563eb;
     box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
   }
-  .actions { display: flex; gap: 12px; margin-top: 8px; }
+
+  .actions { display: flex; gap: 12px; padding-top: 4px; }
   button {
     padding: 10px 28px;
     background: #2563eb;
@@ -206,7 +353,8 @@
     cursor: pointer;
     transition: background 0.15s;
   }
-  button:hover { background: #1d4ed8; }
+  button:hover:not(:disabled) { background: #1d4ed8; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
   button.secondary { background: #f3f4f6; color: #374151; }
   button.secondary:hover { background: #e5e7eb; }
 </style>

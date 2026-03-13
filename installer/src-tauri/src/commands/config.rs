@@ -26,11 +26,10 @@ pub enum SlackConfig {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SkillsConfig {
-    pub metro_north: bool,
-    pub imessage: bool,
-    pub tavily: bool,
-    pub tavily_api_key: Option<String>,
-    pub slack_search: bool,
+    /// List of enabled skill IDs (e.g. ["web_search","weather","metro_north"])
+    pub enabled: Vec<String>,
+    /// Map of env_var → value for skills that require API keys
+    pub keys: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -95,33 +94,18 @@ pub async fn write_config(config: InstallerConfig) -> Result<(), String> {
         SlackConfig::Skip => {}
     }
 
-    let mut skills: Vec<&str> = vec![
-        "web_search",
-        "weather",
-        "calendar",
-        "email",
-        "memory",
-        "briefing",
-    ];
-    if config.skills.imessage {
-        skills.push("imessage");
-    }
-    if config.skills.metro_north {
-        skills.push("metro_north");
-    }
-    if config.skills.slack_search {
-        skills.push("slack_search");
-    }
-    if config.skills.tavily {
-        skills.push("tavily");
-    }
-
     writeln!(out, "# Skills").ok();
-    writeln!(out, "TRUSTY_SKILLS_ENABLED={}", skills.join(",")).ok();
-    if config.skills.tavily {
-        if let Some(key) = &config.skills.tavily_api_key {
-            writeln!(out, "TAVILY_API_KEY={key}").ok();
-        }
+    writeln!(
+        out,
+        "TRUSTY_SKILLS_ENABLED={}",
+        config.skills.enabled.join(",")
+    )
+    .ok();
+    // Write any API keys declared by enabled skills
+    let mut sorted_keys: Vec<(&String, &String)> = config.skills.keys.iter().collect();
+    sorted_keys.sort_by_key(|(k, _)| *k);
+    for (env, value) in sorted_keys {
+        writeln!(out, "{env}={value}").ok();
     }
 
     writeln!(out, "# Paths").ok();

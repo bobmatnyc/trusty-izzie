@@ -23,7 +23,7 @@
     llm: { provider: 'openrouter', apiKey: '' },
     slack: { mode: 'skip' },
     googleEmail: null,
-    skills: { metroNorth: false, imessage: true, tavily: false, slackSearch: false },
+    skills: { enabled: [], keys: {} },
   })
 
   const STEP_COUNT = 7
@@ -70,7 +70,7 @@
       onNext={next}
       onBack={back}
       onUpdate={(cfg) => (state.skills = cfg)}
-      slackConfig={state.slack}
+      slack={state.slack}
     />
   {:else if step === 5}
     <Installing onNext={next} config={state} />
