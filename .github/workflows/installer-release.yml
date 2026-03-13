@@ -1,4 +1,4 @@
-name: Installer Release
+name: Release Izzie.app
 
 on:
   push:
@@ -10,53 +10,84 @@ permissions:
 
 jobs:
   build-macos:
-    name: Build macOS installer
-    runs-on: macos-latest
+    name: Build macOS (universal)
+    runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust stable (universal targets)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Install Node.js
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: installer/src-tauri -> target
+
+      - name: Install Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            installer/src-tauri/target
-          key: macos-installer-cargo-${{ hashFiles('installer/src-tauri/Cargo.lock') }}
-          restore-keys: macos-installer-cargo-
-
-      - name: Cache node_modules
-        uses: actions/cache@v4
-        with:
-          path: installer/node_modules
-          key: macos-installer-npm-${{ hashFiles('installer/package-lock.json') }}
+          cache: 'npm'
+          cache-dependency-path: installer/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: installer
         run: npm ci
 
-      - name: Build installer (universal macOS)
+      - name: Build Izzie.app (universal macOS)
         working-directory: installer
         env:
+          APPLE_SIGNING_IDENTITY: '-'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          npx tauri build --target universal-apple-darwin
+        run: npx tauri build --target universal-apple-darwin
 
-      - name: Upload .dmg to release
+      - name: Locate DMG
+        id: dmg
+        run: |
+          DMG=$(find installer/src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+          echo "path=$DMG" >> $GITHUB_OUTPUT
+          echo "name=$(basename $DMG)" >> $GITHUB_OUTPUT
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: izzie-dmg
+          path: ${{ steps.dmg.outputs.path }}
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build-macos
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: izzie-dmg
+          path: dist/
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            installer/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-          generate_release_notes: false
+          name: "Izzie ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: dist/*.dmg
+          body: |
+            ## Download
+
+            **[⬇ Download Izzie ${{ github.ref_name }} for macOS](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Izzie_${{ github.ref_name }}_universal.dmg)**
+
+            Universal binary — runs on Apple Silicon and Intel Macs.
+
+            > **First launch:** right-click → Open to bypass Gatekeeper (unsigned build)
+
+            ---

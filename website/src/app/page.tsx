@@ -80,6 +80,7 @@ export default function HomePage() {
                 View on GitHub
               </a>
             </div>
+            <p className="text-xs text-slate-500 mt-2">macOS 12+ · Apple Silicon &amp; Intel · Free &amp; open source</p>
           </div>
         </div>
       </section>
