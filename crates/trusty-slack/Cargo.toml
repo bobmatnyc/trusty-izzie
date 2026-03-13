@@ -54,6 +54,9 @@ uuid         = { workspace = true }
 # Path expansion
 shellexpand  = "3"
 
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+
 [lib]
 name = "trusty_slack"
 path = "src/lib.rs"

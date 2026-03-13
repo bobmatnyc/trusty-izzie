@@ -1546,16 +1546,26 @@ async fn run_webhook(
             .expect("invalid governor config"),
     );
 
-    // ── Slack webhook (optional) ────────────────────────────────────────
-    // When SLACK_BOT_TOKEN + SLACK_SIGNING_SECRET are set, mount /slack/events
-    // on this same port so the existing ngrok tunnel handles both Telegram
-    // and Slack webhooks — no second tunnel needed.
-    let slack_router: Option<axum::Router> =
+    // ── Slack integration (optional) ────────────────────────────────────
+    // Socket Mode (preferred for ELT rollout): when SLACK_APP_TOKEN is set,
+    // start a persistent WebSocket connection to Slack — no public URL needed.
+    //
+    // HTTP webhook fallback: when only SLACK_BOT_TOKEN + SLACK_SIGNING_SECRET
+    // are set (no SLACK_APP_TOKEN), mount /slack/events on this port so the
+    // existing ngrok tunnel handles both Telegram and Slack.
+    let slack_router: Option<axum::Router> = if let Some(ss) =
         trusty_slack::slack_state_from_env(Arc::clone(&state.engine), Arc::clone(&state.store))
-            .map(|ss| {
-                tracing::info!("Slack webhook mounted at /slack/events");
-                trusty_slack::build_slack_router(ss)
-            });
+    {
+        if trusty_slack::spawn_socket_mode(Arc::clone(&ss)) {
+            tracing::info!("Slack Socket Mode started (no public URL needed)");
+            None
+        } else {
+            tracing::info!("Slack webhook mounted at /slack/events (HTTP mode)");
+            Some(trusty_slack::build_slack_router(ss))
+        }
+    } else {
+        None
+    };
 
     // Build main router and finalize its state → Router<()>
     let main_app = Router::new()

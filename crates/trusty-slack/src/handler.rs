@@ -105,6 +105,11 @@ pub async fn handle_event(State(state): State<Arc<SlackState>>, req: Request) ->
     }
 }
 
+#[allow(dead_code)]
+pub async fn dispatch_event_pub(state: Arc<SlackState>, callback: EventCallback) {
+    dispatch_event(state, callback).await;
+}
+
 async fn dispatch_event(state: Arc<SlackState>, callback: EventCallback) {
     match callback.event {
         // @mention in any channel — always respond as Izzie.
