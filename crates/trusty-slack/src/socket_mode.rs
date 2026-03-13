@@ -25,6 +25,7 @@ use crate::{events::SlackPayload, handler::SlackState};
 /// Slack Socket Mode envelope wrapper.
 #[derive(Debug, Deserialize)]
 struct Envelope {
+    #[serde(default)]
     envelope_id: String,
     #[serde(rename = "type")]
     kind: String,
