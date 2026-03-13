@@ -10238,6 +10238,7 @@ dependencies = [
  "dirs 5.0.1",
  "serde",
  "serde_json",
+ "shellexpand",
  "tauri",
  "tauri-build",
  "tauri-plugin-fs",

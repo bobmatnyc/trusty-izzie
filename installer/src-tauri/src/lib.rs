@@ -1,7 +1,7 @@
 mod commands;
 mod installer;
 
-use commands::{config, daemon, oauth};
+use commands::{app, config, daemon, oauth};
 
 #[tauri::command]
 async fn check_rust_installed() -> Result<String, String> {
@@ -28,8 +28,14 @@ pub fn run() {
             oauth::poll_oauth_result,
             daemon::install_launch_agent,
             daemon::start_daemon,
+            daemon::stop_daemon,
             daemon::verify_daemon,
             daemon::close_window,
+            app::check_installed,
+            app::read_config,
+            app::open_in_finder,
+            app::reset_config,
+            app::update_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

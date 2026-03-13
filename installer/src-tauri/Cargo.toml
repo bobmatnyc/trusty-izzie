@@ -11,7 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-http = "2"
@@ -21,3 +21,4 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 dirs = "5"
+shellexpand = "3"

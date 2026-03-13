@@ -1,0 +1,307 @@
+<script lang="ts">
+  import { invoke } from '@tauri-apps/api/core'
+  import type { SkillsManifest, SkillDef, SkillKey, SkillsConfig } from '../steps/SkillsSelect.svelte'
+
+  let manifest = $state<SkillsManifest | null>(null)
+  let enabled = $state<Set<string>>(new Set())
+  let keyValues = $state<Record<string, string>>({})
+  let originalEnabled = $state<Set<string>>(new Set())
+  let originalKeys = $state<Record<string, string>>({})
+  let loadError = $state<string | null>(null)
+  let saving = $state(false)
+  let savedMsg = $state(false)
+
+  $effect(() => {
+    Promise.all([
+      fetch('/skills-manifest.json').then(r => r.json()),
+      invoke<{ skills_enabled: string[] }>('read_config'),
+    ]).then(([m, cfg]) => {
+      manifest = m as SkillsManifest
+      const initEnabled = new Set<string>(cfg.skills_enabled ?? [])
+      enabled = new Set(initEnabled)
+      originalEnabled = new Set(initEnabled)
+      keyValues = {}
+      originalKeys = {}
+    }).catch((e: Error) => {
+      loadError = e.message
+    })
+  })
+
+  function toggle(id: string) {
+    const next = new Set(enabled)
+    if (next.has(id)) {
+      next.delete(id)
+      if (manifest) {
+        const skill = manifest.optional.find((s: SkillDef) => s.id === id)
+        if (skill) {
+          const nextKeys = { ...keyValues }
+          skill.keys.forEach((k: SkillKey) => delete nextKeys[k.env])
+          keyValues = nextKeys
+        }
+      }
+    } else {
+      next.add(id)
+    }
+    enabled = next
+  }
+
+  function setKey(env: string, value: string) {
+    keyValues = { ...keyValues, [env]: value }
+  }
+
+  function hasChanges(): boolean {
+    if (enabled.size !== originalEnabled.size) return true
+    for (const id of enabled) {
+      if (!originalEnabled.has(id)) return true
+    }
+    const kStr = JSON.stringify(Object.entries(keyValues).sort())
+    const oStr = JSON.stringify(Object.entries(originalKeys).sort())
+    return kStr !== oStr
+  }
+
+  function missingKeys(): string[] {
+    if (!manifest) return []
+    const missing: string[] = []
+    const allSkills = [...manifest.bundled, ...manifest.optional]
+    for (const skill of allSkills) {
+      if (enabled.has(skill.id)) {
+        for (const k of skill.keys) {
+          if (k.required && !keyValues[k.env]?.trim()) missing.push(k.env)
+        }
+      }
+    }
+    return missing
+  }
+
+  async function save() {
+    if (!hasChanges() || missingKeys().length > 0) return
+    saving = true
+    try {
+      await invoke('update_skills', {
+        enabled: Array.from(enabled),
+        keys: Object.fromEntries(
+          Object.entries(keyValues).filter(([, v]) => v.trim().length > 0)
+        ),
+      })
+      originalEnabled = new Set(enabled)
+      originalKeys = { ...keyValues }
+      savedMsg = true
+      setTimeout(() => { savedMsg = false }, 2000)
+    } catch (e) {
+      loadError = String(e)
+    } finally {
+      saving = false
+    }
+  }
+</script>
+
+<div class="skills-view">
+  <div class="view-header">
+    <div>
+      <h2>Skills</h2>
+      <p class="subtitle">Manage which capabilities are enabled</p>
+    </div>
+  </div>
+
+  {#if loadError}
+    <div class="error">{loadError}</div>
+  {:else if !manifest}
+    <div class="loading">Loading skills…</div>
+  {:else}
+
+    <section>
+      <div class="section-header">
+        <span class="section-title">Bundled</span>
+        <span class="section-note">always enabled</span>
+      </div>
+      <div class="skill-list">
+        {#each manifest.bundled as skill}
+          <div class="skill-row bundled">
+            <div class="skill-main">
+              <span class="check-icon">✓</span>
+              <div class="skill-info">
+                <span class="skill-name">{skill.name}</span>
+                <span class="skill-desc">{skill.description}</span>
+              </div>
+            </div>
+            {#if skill.keys.length > 0}
+              <div class="key-fields">
+                {#each skill.keys as key}
+                  <div class="key-field">
+                    <label for="key-{key.env}">
+                      {key.label}
+                      {#if key.required}<span class="required">*</span>{/if}
+                    </label>
+                    <input
+                      id="key-{key.env}"
+                      type="password"
+                      placeholder={key.placeholder}
+                      value={keyValues[key.env] ?? ''}
+                      oninput={(e) => setKey(key.env, (e.target as HTMLInputElement).value)}
+                    />
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header">
+        <span class="section-title">Optional</span>
+        <span class="section-note">toggle on/off</span>
+      </div>
+      <div class="skill-list">
+        {#each manifest.optional as skill}
+          {@const isEnabled = enabled.has(skill.id)}
+          <div class="skill-row optional" class:active={isEnabled}>
+            <div class="skill-main">
+              <input
+                type="checkbox"
+                id="skill-{skill.id}"
+                checked={isEnabled}
+                onchange={() => toggle(skill.id)}
+              />
+              <div class="skill-info">
+                <label for="skill-{skill.id}" class="skill-name">{skill.name}</label>
+                <span class="skill-desc">{skill.description}</span>
+                {#if skill.tags?.length}
+                  <div class="tags">
+                    {#each skill.tags as tag}
+                      <span class="tag">{tag}</span>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            </div>
+            {#if isEnabled && skill.keys.length > 0}
+              <div class="key-fields">
+                {#each skill.keys as key}
+                  <div class="key-field">
+                    <label for="key-opt-{key.env}">
+                      {key.label}
+                      {#if key.required}<span class="required">*</span>{/if}
+                    </label>
+                    <input
+                      id="key-opt-{key.env}"
+                      type="password"
+                      placeholder={key.placeholder}
+                      value={keyValues[key.env] ?? ''}
+                      oninput={(e) => setKey(key.env, (e.target as HTMLInputElement).value)}
+                    />
+                    {#if key.url}
+                      <a href={key.url} target="_blank" class="key-link">{key.urlLabel ?? key.url}</a>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    </section>
+
+    <div class="save-bar">
+      {#if savedMsg}
+        <span class="saved-toast">Saved</span>
+      {:else if !hasChanges()}
+        <span class="no-changes">No changes</span>
+      {/if}
+      <button
+        class="btn-primary"
+        onclick={save}
+        disabled={saving || !hasChanges() || missingKeys().length > 0}
+      >
+        {saving ? 'Saving…' : 'Save changes'}
+      </button>
+    </div>
+
+  {/if}
+</div>
+
+<style>
+  .skills-view {
+    padding: 28px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    overflow-y: auto;
+    height: 100%;
+  }
+
+  .view-header { display: flex; justify-content: space-between; align-items: flex-start; }
+  h2 { font-size: 20px; font-weight: 600; color: #111827; margin: 0 0 2px; }
+  .subtitle { color: #6b7280; font-size: 13px; margin: 0; }
+
+  .loading { color: #9ca3af; font-size: 14px; text-align: center; padding: 24px; }
+  .error { color: #dc2626; font-size: 13px; background: #fef2f2; padding: 12px; border-radius: 8px; }
+
+  section { display: flex; flex-direction: column; gap: 8px; }
+  .section-header {
+    display: flex; align-items: baseline; gap: 8px;
+    padding-bottom: 4px; border-bottom: 1px solid #f3f4f6;
+  }
+  .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #374151; }
+  .section-note { font-size: 11px; color: #9ca3af; }
+
+  .skill-list { display: flex; flex-direction: column; gap: 4px; }
+  .skill-row {
+    border: 1px solid #e5e7eb; border-radius: 10px;
+    padding: 12px 14px; background: white;
+    display: flex; flex-direction: column; gap: 12px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .skill-row.bundled { background: #f9fafb; }
+  .skill-row.optional.active { background: #eff6ff; border-color: #bfdbfe; }
+
+  .skill-main { display: flex; align-items: flex-start; gap: 10px; }
+  .check-icon { color: #10b981; font-size: 14px; margin-top: 1px; flex-shrink: 0; }
+  input[type="checkbox"] { accent-color: #2563eb; margin-top: 2px; flex-shrink: 0; cursor: pointer; }
+
+  .skill-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+  .skill-name { font-size: 13px; font-weight: 600; color: #111; cursor: pointer; }
+  .skill-desc { font-size: 12px; color: #6b7280; line-height: 1.4; }
+
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .tag {
+    font-size: 10px; padding: 2px 7px; border-radius: 999px;
+    background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb;
+  }
+
+  .key-fields {
+    display: flex; flex-direction: column; gap: 10px;
+    padding-top: 4px; border-top: 1px solid #e5e7eb;
+  }
+  .key-field { display: flex; flex-direction: column; gap: 5px; }
+  .key-field label { font-size: 12px; font-weight: 500; color: #374151; }
+  .required { color: #dc2626; margin-left: 2px; }
+  .key-link { font-size: 11px; color: #2563eb; text-decoration: none; }
+  .key-link:hover { text-decoration: underline; }
+
+  input[type="password"] {
+    border: 1px solid #d1d5db; border-radius: 7px; padding: 8px 12px;
+    font-size: 12px; font-family: monospace; width: 100%; box-sizing: border-box;
+  }
+  input[type="password"]:focus {
+    outline: none; border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+  }
+
+  .save-bar {
+    display: flex; align-items: center; justify-content: flex-end;
+    gap: 12px; padding-top: 4px;
+  }
+
+  .saved-toast { font-size: 13px; color: #10b981; font-weight: 500; }
+  .no-changes { font-size: 13px; color: #9ca3af; }
+
+  .btn-primary {
+    padding: 10px 24px; background: #2563eb; color: white;
+    border: none; border-radius: 8px; font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+</style>

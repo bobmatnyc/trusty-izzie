@@ -91,6 +91,17 @@ pub async fn verify_daemon() -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn stop_daemon() -> Result<(), String> {
+    let plist = plist_path();
+    tokio::process::Command::new("launchctl")
+        .args(["unload", &plist.to_string_lossy()])
+        .status()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn close_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     app.get_webview_window("main")
