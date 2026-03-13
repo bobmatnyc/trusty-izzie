@@ -51,6 +51,12 @@ pub async fn send_telegram_push(sqlite: &SqliteStore, text: &str) -> Result<(), 
             error!("Telegram push error: {}", err);
         }
     }
+
+    // Fan-out to Slack webhook if configured (fire-and-forget, never blocks Telegram).
+    if let Err(e) = crate::slack_push::send_slack_push(text).await {
+        error!("Slack push error: {e}");
+    }
+
     Ok(())
 }
 

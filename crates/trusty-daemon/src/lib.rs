@@ -8,6 +8,7 @@ pub mod handlers;
 pub mod ipc;
 pub mod loop_runner;
 pub mod scheduling;
+pub mod slack_push;
 pub mod telegram_push;
 
 pub use dispatcher::EventDispatcher;
