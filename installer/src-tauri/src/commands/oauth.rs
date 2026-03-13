@@ -10,8 +10,8 @@ fn result_store() -> &'static Mutex<Option<String>> {
 }
 
 const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth\
-     ?client_id=409456389838-placeholder\
-     &redirect_uri=http://localhost:8080/callback\
+     ?client_id=409456389838-2d316q88ofdac1j0nd67beqaoe45k51g.apps.googleusercontent.com\
+     &redirect_uri=http://localhost:3333/callback\
      &response_type=code\
      &scope=https://www.googleapis.com/auth/gmail.readonly\
        %20https://www.googleapis.com/auth/calendar.readonly\
@@ -29,7 +29,7 @@ pub async fn start_google_oauth(app: tauri::AppHandle) -> Result<(), String> {
         .open_url(GOOGLE_AUTH_URL, None::<String>)
         .map_err(|e| e.to_string())?;
 
-    // Spawn a task that listens on :8080 for the OAuth callback.
+    // Spawn a task that listens on :3333 for the OAuth callback.
     tokio::spawn(async move {
         if let Err(e) = listen_for_callback().await {
             eprintln!("OAuth callback listener error: {e}");
@@ -43,7 +43,7 @@ async fn listen_for_callback() -> anyhow::Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
+    let listener = TcpListener::bind("127.0.0.1:3333").await?;
     let (mut stream, _) = listener.accept().await?;
 
     let mut buf = [0u8; 4096];
