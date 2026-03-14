@@ -15,6 +15,7 @@
     id: string
     name: string
     description: string
+    scope_summary?: string
     tags?: string[]
     keys: SkillKey[]
   }
@@ -193,6 +194,9 @@
                 <div class="skill-info">
                   <label for="skill-{skill.id}" class="skill-name">{skill.name}</label>
                   <span class="skill-desc">{skill.description}</span>
+                  {#if skill.scope_summary}
+                    <span class="skill-scope">{skill.scope_summary}</span>
+                  {/if}
                   {#if skill.tags?.length}
                     <div class="tags">
                       {#each skill.tags as tag}
@@ -301,6 +305,7 @@
   .skill-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
   .skill-name { font-size: 13px; font-weight: 600; color: #111; cursor: pointer; }
   .skill-desc { font-size: 12px; color: #6b7280; line-height: 1.4; }
+  .skill-scope { font-size: 11px; color: #9ca3af; line-height: 1.4; font-style: italic; }
 
   .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
   .tag {

@@ -2375,6 +2375,52 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
         session: &mut ChatSession,
         user_message: &str,
     ) -> Result<StructuredResponse> {
+        // 0. Check for skill activation intent before anything else.
+        if let Some((env_key, api_key_value)) = detect_skill_activation(user_message) {
+            // Set in current process so subsequent tool calls in this process see it.
+            std::env::set_var(&env_key, &api_key_value);
+            // Persist to config.env for future restarts.
+            if let Err(e) = persist_skill_key(&env_key, &api_key_value) {
+                tracing::warn!(env_key = %env_key, error = %e, "failed to persist skill key to config.env");
+            }
+            // Find display name for confirmation message.
+            let display_name = SKILL_CATALOG
+                .iter()
+                .find(|(k, _)| *k == env_key.as_str())
+                .map(|(_, info)| info.name)
+                .unwrap_or(&env_key);
+            let reply = format!(
+                "Done! The **{}** skill is now active. I've saved your key to `config.env` so it persists across restarts. Try asking me something that uses it.",
+                display_name
+            );
+            session.messages.push(ChatMessage {
+                id: Uuid::new_v4(),
+                session_id: session.id,
+                role: MessageRole::User,
+                content: user_message.to_string(),
+                tool_name: None,
+                tool_result: None,
+                token_count: None,
+                created_at: chrono::Utc::now(),
+            });
+            session.messages.push(ChatMessage {
+                id: Uuid::new_v4(),
+                session_id: session.id,
+                role: MessageRole::Assistant,
+                content: reply.clone(),
+                tool_name: None,
+                tool_result: None,
+                token_count: None,
+                created_at: chrono::Utc::now(),
+            });
+            return Ok(StructuredResponse {
+                reply,
+                memories_to_save: vec![],
+                referenced_entities: vec![],
+                tool_calls: vec![],
+            });
+        }
+
         // 1. Append user message to session.
         session.messages.push(ChatMessage {
             id: Uuid::new_v4(),
@@ -2552,11 +2598,12 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
             // Execute each requested tool.
             let mut results_text = String::new();
             for tc in &tool_calls {
-                let result = self
+                let raw = self
                     .execute_tool_by_name(&tc.name, &tc.arguments)
                     .await
                     .unwrap_or_else(|e| format!("Error: {e}"));
                 tracing::info!(tool = %tc.name, "tool executed");
+                let result = format_skill_suggestion(&raw);
                 results_text.push_str(&format!("Tool `{}` returned:\n{}\n\n", tc.name, result));
             }
 
@@ -2662,6 +2709,144 @@ const BLOCKED_SHELL_PATTERNS: &[&str] = &[
 fn is_dangerous_command(cmd: &str) -> bool {
     let lower = cmd.to_lowercase();
     BLOCKED_SHELL_PATTERNS.iter().any(|pat| lower.contains(pat))
+}
+
+// ── Skill catalog ─────────────────────────────────────────────────────────────
+
+struct SkillInfo {
+    name: &'static str,
+    scope_summary: &'static str,
+    privacy_note: &'static str,
+    get_key_url: &'static str,
+    activate_name: &'static str,
+}
+
+const SKILL_CATALOG: &[(&str, SkillInfo)] = &[
+    (
+        "TAVILY_API_KEY",
+        SkillInfo {
+            name: "Tavily AI Search",
+            scope_summary: "Searches the public web via Tavily API",
+            privacy_note: "Your queries are sent to Tavily's servers. No personal data is included.",
+            get_key_url: "https://app.tavily.com",
+            activate_name: "tavily",
+        },
+    ),
+    (
+        "FIRECRAWL_API_KEY",
+        SkillInfo {
+            name: "Firecrawl Web Scraping",
+            scope_summary: "Fetches and extracts full content from any URL",
+            privacy_note: "The URL you provide is sent to Firecrawl's servers for fetching.",
+            get_key_url: "https://firecrawl.dev",
+            activate_name: "firecrawl",
+        },
+    ),
+    (
+        "SKYVERN_API_KEY",
+        SkillInfo {
+            name: "Skyvern Browser Automation",
+            scope_summary: "Controls a browser to interact with websites on your behalf",
+            privacy_note: "Skyvern runs in their cloud. Any credentials or data you provide in task instructions will be processed by their servers.",
+            get_key_url: "https://app.skyvern.com",
+            activate_name: "skyvern",
+        },
+    ),
+    (
+        "SERPAPI_API_KEY",
+        SkillInfo {
+            name: "SerpApi Search",
+            scope_summary: "Fetches Google search results in structured format",
+            privacy_note: "Your queries are sent to SerpApi's servers, which proxy Google search.",
+            get_key_url: "https://serpapi.com",
+            activate_name: "serpapi",
+        },
+    ),
+];
+
+/// If `tool_output` is a "not configured" message, replace it with a
+/// user-friendly suggestion that names the skill and explains how to activate it.
+fn format_skill_suggestion(tool_output: &str) -> String {
+    // Pattern: "<Name> not configured (<ENV_KEY> missing)"
+    for (env_key, info) in SKILL_CATALOG {
+        if tool_output.contains(env_key) && tool_output.contains("not configured") {
+            return format!(
+                "I can help with that, but it requires the **{}** skill which isn't set up yet.\n\n\
+                **What it does:** {}\n\
+                **Privacy:** {}\n\
+                **To activate:** Get an API key at {}, then tell me: \
+                \"activate {} with key [your-key]\"",
+                info.name,
+                info.scope_summary,
+                info.privacy_note,
+                info.get_key_url,
+                info.activate_name,
+            );
+        }
+    }
+    tool_output.to_string()
+}
+
+/// Detect messages where the user is providing an API key for a skill.
+/// Returns `(env_key, api_key_value)` when a match is found.
+///
+/// Recognised patterns (case-insensitive skill name):
+///   "activate tavily with key tvly-abc"
+///   "set up firecrawl, my key is fc-abc"
+///   "my tavily key is tvly-abc"
+///   "install serpapi key f9938..."
+fn detect_skill_activation(msg: &str) -> Option<(String, String)> {
+    let lower = msg.to_lowercase();
+
+    // Map recognisable aliases to env keys.
+    let aliases: &[(&str, &str)] = &[
+        ("tavily", "TAVILY_API_KEY"),
+        ("firecrawl", "FIRECRAWL_API_KEY"),
+        ("skyvern", "SKYVERN_API_KEY"),
+        ("serpapi", "SERPAPI_API_KEY"),
+    ];
+
+    for (alias, env_key) in aliases {
+        if !lower.contains(alias) {
+            continue;
+        }
+        // Look for a key value: a contiguous non-whitespace token that looks like
+        // an API key (letters/digits/hyphens, at least 8 chars).
+        let words: Vec<&str> = msg.split_whitespace().collect();
+        for (i, word) in words.iter().enumerate() {
+            let w = word.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-');
+            let is_key_word = w.len() >= 8
+                && w.chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.');
+            // Skip if the word is a known keyword (not a key value).
+            let lower_w = w.to_lowercase();
+            if is_key_word
+                && ![
+                    "activate", "setup", "install", "key", "with", "my", "is", alias,
+                ]
+                .contains(&lower_w.as_str())
+                && i > 0
+            {
+                return Some((env_key.to_string(), w.to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// Append `KEY=value` to the config.env file in `TRUSTY_DATA_DIR`.
+fn persist_skill_key(env_key: &str, value: &str) -> std::io::Result<()> {
+    use std::io::Write as IoWrite;
+    let data_dir = std::env::var("TRUSTY_DATA_DIR")
+        .unwrap_or_else(|_| "~/.local/share/trusty-izzie".to_string());
+    let data_dir = shellexpand::tilde(&data_dir);
+    let config_env_path = format!("{}/config.env", data_dir);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&config_env_path)?;
+    writeln!(file, "{}={}", env_key, value)?;
+    Ok(())
 }
 
 fn system_prompt(

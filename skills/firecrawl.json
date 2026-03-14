@@ -1,0 +1,32 @@
+{
+  "id": "firecrawl",
+  "name": "Firecrawl Web Scraping",
+  "version": "1.0.0",
+  "description": "Full-page web content extraction. Converts any URL into clean markdown text, bypassing paywalls and JavaScript rendering.",
+  "scope": {
+    "authority": "web_scrape",
+    "summary": "Fetches and extracts full content from any URL",
+    "capabilities": [
+      "Extract full text content from any webpage",
+      "Convert JavaScript-rendered pages to markdown",
+      "Read articles, documentation, and web pages in full"
+    ],
+    "outbound_requests": ["api.firecrawl.dev", "any URL you provide"],
+    "data_sent": "The URL you ask Izzie to scrape",
+    "data_received": "Full page content as markdown",
+    "privacy_level": "low",
+    "note": "The URL you provide is sent to Firecrawl's servers for fetching."
+  },
+  "config": {
+    "env_key": "FIRECRAWL_API_KEY",
+    "required": true,
+    "get_key_url": "https://firecrawl.dev",
+    "get_key_instructions": "Sign up at firecrawl.dev → Dashboard → API Keys"
+  },
+  "installer": {
+    "label": "Firecrawl Web Scraping",
+    "description": "Extract full content from any webpage",
+    "api_key_label": "Firecrawl API Key",
+    "api_key_placeholder": "fc-..."
+  }
+}

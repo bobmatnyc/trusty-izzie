@@ -1,0 +1,32 @@
+{
+  "id": "tavily",
+  "name": "Tavily AI Search",
+  "version": "1.0.0",
+  "description": "AI-powered web search that returns summarized answers with sources. Better than raw web scraping for research questions.",
+  "scope": {
+    "authority": "web_search",
+    "summary": "Searches the public web via Tavily API",
+    "capabilities": [
+      "Search the public web for any topic",
+      "Return AI-summarized answers with citations",
+      "Access news, articles, and websites"
+    ],
+    "outbound_requests": ["api.tavily.com"],
+    "data_sent": "Your search query text",
+    "data_received": "Web search results and AI answer",
+    "privacy_level": "low",
+    "note": "Your queries are sent to Tavily's servers. No personal data is included."
+  },
+  "config": {
+    "env_key": "TAVILY_API_KEY",
+    "required": true,
+    "get_key_url": "https://app.tavily.com",
+    "get_key_instructions": "Sign up at app.tavily.com → API Keys → Create key"
+  },
+  "installer": {
+    "label": "Tavily AI Search",
+    "description": "Search the web with AI-summarized answers",
+    "api_key_label": "Tavily API Key",
+    "api_key_placeholder": "tvly-..."
+  }
+}

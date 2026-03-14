@@ -63,8 +63,9 @@
     },
     {
       "id": "tavily",
-      "name": "Tavily Search",
+      "name": "Tavily AI Search",
       "description": "Enhanced web research with full-page answers and citations",
+      "scope_summary": "Searches the public web via Tavily API",
       "tags": ["API key required"],
       "keys": [
         {
@@ -72,15 +73,16 @@
           "label": "Tavily API Key",
           "placeholder": "tvly-...",
           "required": true,
-          "url": "https://tavily.com",
-          "urlLabel": "Get a key at tavily.com →"
+          "url": "https://app.tavily.com",
+          "urlLabel": "Get a key at app.tavily.com →"
         }
       ]
     },
     {
       "id": "firecrawl",
-      "name": "Firecrawl",
+      "name": "Firecrawl Web Scraping",
       "description": "Full web page extraction — scrape any URL to clean markdown",
+      "scope_summary": "Fetches and extracts full content from any URL",
       "tags": ["API key required"],
       "keys": [
         {
@@ -95,8 +97,9 @@
     },
     {
       "id": "skyvern",
-      "name": "Skyvern",
+      "name": "Skyvern Browser Automation",
       "description": "Browser automation — navigate websites, fill forms, extract data",
+      "scope_summary": "Controls a browser to interact with websites on your behalf",
       "tags": ["API key required"],
       "keys": [
         {
@@ -111,8 +114,9 @@
     },
     {
       "id": "serpapi",
-      "name": "SerpApi",
+      "name": "SerpApi Search",
       "description": "Google search with structured results — knowledge graph, rich snippets, local results",
+      "scope_summary": "Fetches Google search results in structured format",
       "tags": ["API key required"],
       "keys": [
         {

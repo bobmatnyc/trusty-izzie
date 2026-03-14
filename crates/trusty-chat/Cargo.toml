@@ -31,3 +31,4 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 urlencoding = "2"
+shellexpand = { workspace = true }
