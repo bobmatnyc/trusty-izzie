@@ -1668,10 +1668,25 @@ impl ChatEngine {
             ));
         }
 
+        let event_id = match resp["id"].as_str() {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                return Ok(format!(
+                    "Action UNCONFIRMED: calendar API returned no event ID for '{}'. \
+                     The event may NOT have been created. Raw response: {}",
+                    title,
+                    serde_json::to_string(&resp)
+                        .unwrap_or_default()
+                        .chars()
+                        .take(200)
+                        .collect::<String>()
+                ))
+            }
+        };
         let html_link = resp["htmlLink"].as_str().unwrap_or("");
         Ok(format!(
-            "Event created: '{}' starting {}. Calendar link: {}",
-            title, start_datetime, html_link
+            "Event created (confirmed id: {}): '{}' starting {}. Link: {}",
+            event_id, title, start_datetime, html_link
         ))
     }
 
@@ -3105,6 +3120,14 @@ Valid preference keys and defaults:
 
 After saving, confirm: "Got it — I've saved that preference."
 
+## Action Verification (CRITICAL — NEVER VIOLATE)
+
+After calling any state-mutating tool (create_event, create_task, send_email, reply_email, update_event, delete_event):
+- ONLY report success if the tool result contains "confirmed id:" or "sent successfully" or "created successfully" or "Queued for your approval"
+- If the tool result contains "UNCONFIRMED" or "Failed" or "error" — tell the user exactly: "I attempted [action] but could not confirm it completed. [reason]. Please verify manually."
+- NEVER say "I've created", "I've sent", "I've scheduled", "Done!" unless the tool confirmed it with an ID or approval queue entry
+- The action is not done until the tool returns a confirmation ID or approval queue entry
+
 ## CRITICAL OUTPUT FORMAT
 
 Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — no prose before it, no explanation after it, no markdown code fences around it. Start your response with {{ and end with }}.
@@ -3461,8 +3484,23 @@ impl ChatEngine {
         let status = resp.status();
         if status.is_success() {
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            let task_id = body["id"].as_str().unwrap_or("unknown");
-            Ok(format!("✅ Task created: \"{title}\" (ID: {task_id})"))
+            let task_id = match body["id"].as_str() {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    return Ok(format!(
+                        "Action UNCONFIRMED: task API returned no task ID for \"{title}\". \
+                         The task may NOT have been created. Raw response: {}",
+                        serde_json::to_string(&body)
+                            .unwrap_or_default()
+                            .chars()
+                            .take(200)
+                            .collect::<String>()
+                    ))
+                }
+            };
+            Ok(format!(
+                "Task created (confirmed id: {task_id}): \"{title}\""
+            ))
         } else {
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
             let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
