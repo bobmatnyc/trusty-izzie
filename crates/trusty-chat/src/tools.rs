@@ -130,6 +130,8 @@ pub enum ToolName {
     TavilySearch,
     /// Full web page extraction via Firecrawl (returns clean markdown).
     FirecrawlScrape,
+    /// Browser automation via Skyvern — navigate websites, fill forms, extract data.
+    SkyvernTask,
 }
 
 /// A parsed tool call request from the LLM.

@@ -94,6 +94,22 @@
       ]
     },
     {
+      "id": "skyvern",
+      "name": "Skyvern",
+      "description": "Browser automation — navigate websites, fill forms, extract data",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "SKYVERN_API_KEY",
+          "label": "Skyvern API Key",
+          "placeholder": "eyJ...",
+          "required": true,
+          "url": "https://app.skyvern.com",
+          "urlLabel": "Get a key at app.skyvern.com →"
+        }
+      ]
+    },
+    {
       "id": "slack_search",
       "name": "Slack Search",
       "description": "Search Slack messages and channel history",

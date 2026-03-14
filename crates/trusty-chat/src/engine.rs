@@ -251,6 +251,7 @@ impl ChatEngine {
             ToolName::RejectAction => self.tool_reject_action(input),
             ToolName::TavilySearch => self.tool_tavily_search(input).await,
             ToolName::FirecrawlScrape => self.tool_firecrawl_scrape(input).await,
+            ToolName::SkyvernTask => self.tool_skyvern_task(input).await,
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -1305,6 +1306,94 @@ impl ChatEngine {
         } else {
             Ok(markdown)
         }
+    }
+
+    /// Run a browser automation task via Skyvern.
+    async fn tool_skyvern_task(&self, input: &serde_json::Value) -> Result<String> {
+        let api_key = match std::env::var("SKYVERN_API_KEY") {
+            Ok(k) => k,
+            Err(_) => return Ok("Skyvern not configured (SKYVERN_API_KEY missing)".to_string()),
+        };
+        let url = input["url"]
+            .as_str()
+            .context("Missing required parameter: url")?;
+        let goal = input["goal"]
+            .as_str()
+            .context("Missing required parameter: goal")?;
+        let extract = input["extract"].as_str().unwrap_or("").to_string();
+
+        let mut body = serde_json::json!({
+            "url": url,
+            "navigation_goal": goal,
+            "proxy_location": "NONE"
+        });
+        if !extract.is_empty() {
+            body["data_extraction_goal"] = serde_json::Value::String(extract);
+        }
+
+        let client = reqwest::Client::new();
+        let create_resp: serde_json::Value = client
+            .post("https://api.skyvern.com/api/v1/tasks")
+            .header("x-api-key", &api_key)
+            .json(&body)
+            .send()
+            .await
+            .context("Skyvern create task request failed")?
+            .error_for_status()
+            .context("Skyvern API error on task creation")?
+            .json()
+            .await
+            .context("Failed to parse Skyvern create response")?;
+
+        let task_id = create_resp["task_id"]
+            .as_str()
+            .context("Skyvern response missing task_id")?
+            .to_string();
+
+        // Poll up to 30 times with 2s sleep (60s total timeout).
+        for _ in 0..30 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let poll: serde_json::Value = client
+                .get(format!("https://api.skyvern.com/api/v1/tasks/{task_id}"))
+                .header("x-api-key", &api_key)
+                .send()
+                .await
+                .context("Skyvern poll request failed")?
+                .error_for_status()
+                .context("Skyvern API error on poll")?
+                .json()
+                .await
+                .context("Failed to parse Skyvern poll response")?;
+
+            let status = poll["status"].as_str().unwrap_or("unknown");
+            match status {
+                "completed" => {
+                    let info = poll["extracted_information"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    if info.is_empty() {
+                        return Ok(format!("Task {task_id} completed with no extracted data."));
+                    }
+                    const MAX_CHARS: usize = 3000;
+                    return if info.len() > MAX_CHARS {
+                        let truncated: String = info.chars().take(MAX_CHARS).collect();
+                        Ok(format!("{truncated}\n\n[truncated — ask me to continue]"))
+                    } else {
+                        Ok(info)
+                    };
+                }
+                "failed" => {
+                    let reason = poll["failure_reason"].as_str().unwrap_or("unknown reason");
+                    return Ok(format!("Skyvern task failed: {reason}"));
+                }
+                _ => {} // "created" | "running" — keep polling
+            }
+        }
+
+        Ok(format!(
+            "Task running at https://app.skyvern.com/tasks/{task_id} — check back shortly"
+        ))
     }
 
     async fn fetch_calendar_events_for(&self, email: &str, days: i64) -> Result<Vec<String>> {
@@ -2589,6 +2678,7 @@ I can check my own service status with `check_service_status`, report my version
 - **Web Search**: I can search the web in real time via `web_search` (Brave Search API). Use this for current events, news, prices, and any information that may have changed since my training cutoff.
 - **Tavily Search**: Use `tavily_search` for research questions and current events when you want a direct AI-synthesized answer plus cited sources. Requires `TAVILY_API_KEY`.
 - **Firecrawl Scrape**: Use `firecrawl_scrape` when the user shares a URL and wants its full content extracted, or when `web_search` returns a URL worth reading in full. Returns clean markdown. Requires `FIRECRAWL_API_KEY`.
+- **Skyvern Browser Automation**: Use `skyvern_task` when the user needs to interact with a website — fill a form, submit something, click buttons, or extract data from a page that requires navigation. Unlike Firecrawl (passive scrape), Skyvern *acts* on the page. Tasks take 30–90 seconds; Izzie waits and reports results. Requires `SKYVERN_API_KEY`.
 - **Unified Search**: Use `search_all` to search across ALL sources simultaneously — memories, iMessage, Slack, calendar, tasks, and web — in a single call.
 - **Email drafting**: I can draft emails and replies on your behalf using `send_email` / `reply_email`. All emails go into an approval queue — I show you the draft and wait for `approve <id>` before sending.
 - **Task creation**: I can create Google Tasks directly via `create_task` (no approval needed).
@@ -2633,6 +2723,7 @@ I can check my own service status with `check_service_status`, report my version
 - `fetch_page`: Fetch and read the text content of a URL. Required: url (string). Optional: max_chars (default 3000, max 8000). Use after web_search to get full article/review content.
 - `tavily_search`: AI-optimized web search via Tavily. Required: query (string). Returns a direct synthesized answer (if available) followed by top results as `- [title](url): snippet`. Best for research questions and current events. No-op if TAVILY_API_KEY is not set.
 - `firecrawl_scrape`: Extract a web page as clean markdown via Firecrawl. Required: url (string). Caps output at 4000 chars. Use when a user shares a URL to read, or after web_search to read a full article. No-op if FIRECRAWL_API_KEY is not set.
+- `skyvern_task`: Browser automation via Skyvern. Required: url (string), goal (string — what to do on the page). Optional: extract (string — what data to extract). Polls up to 60s; returns extracted_information on completion. No-op if SKYVERN_API_KEY is not set.
 - `create_skill`: Design and build a new skill. Uses Opus to architect the skill spec and Sonnet to write the Python implementation. Required: name (kebab-case, e.g. "hacker-news"), description (plain English — what it fetches, which APIs, etc.). The skill is available on the next turn.
 
 ## Acting on Your Behalf (Search + Act)
@@ -2706,6 +2797,7 @@ NEVER fabricate factual information. For these topics you MUST call the appropri
 - Severe weather / storm warnings / alerts → `get_weather_alerts`
 - Current events, news, real-time information, prices → `web_search` or `tavily_search`
 - User pastes a URL and asks to read/summarize it → `firecrawl_scrape`
+- User needs to interact with a website (fill a form, submit, click, extract data requiring navigation) → `skyvern_task`
 
 If a tool returns no data (e.g. no calendar events), say so honestly. Never invent meetings, contacts, emails, or any factual data.
 

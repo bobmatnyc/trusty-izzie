@@ -118,6 +118,7 @@ pub async fn update_skills(
         "TRUSTY_SKILLS_ENABLED",
         "TAVILY_API_KEY",
         "FIRECRAWL_API_KEY",
+        "SKYVERN_API_KEY",
         "BRAVE_API_KEY",
         "GITHUB_TOKEN",
         "LINEAR_API_KEY",
