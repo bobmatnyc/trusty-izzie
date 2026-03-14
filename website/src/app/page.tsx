@@ -33,13 +33,13 @@ export default function HomePage() {
               <Github className="w-4 h-4" />
               GitHub
             </a>
-            <a
-              href={RELEASES_URL}
+            <Link
+              href="/downloads"
               className="ml-2 px-3 py-1.5 text-sm bg-white text-slate-900 font-medium rounded-md hover:bg-slate-100 transition-colors flex items-center gap-1.5"
             >
               <Download className="w-3.5 h-3.5" />
               Download
-            </a>
+            </Link>
           </nav>
         </div>
       </header>
@@ -65,13 +65,13 @@ export default function HomePage() {
               Open source &middot; Rust &middot; Your data never leaves your Mac
             </p>
             <div className="flex flex-wrap gap-3">
-              <a
-                href={RELEASES_URL}
+              <Link
+                href="/downloads"
                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-slate-900 font-semibold rounded-lg hover:bg-slate-100 transition-colors text-sm"
               >
                 <Download className="w-4 h-4" />
                 Download for macOS
-              </a>
+              </Link>
               <a
                 href={GITHUB_URL}
                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-800 text-white font-semibold rounded-lg hover:bg-slate-700 transition-colors text-sm border border-slate-700"
