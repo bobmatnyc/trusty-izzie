@@ -1807,6 +1807,30 @@ async fn main() -> Result<()> {
 
             let instance_id = load_instance_id();
             let store = Arc::new(Store::open(&data_dir, &instance_id).await?);
+
+            // Cache entity/memory counts in kv_config so get_izzie_status can report them.
+            {
+                let store_c = Arc::clone(&store);
+                tokio::spawn(async move {
+                    match store_c.count_vectors().await {
+                        Ok((entities, memories)) => {
+                            let _ = store_c
+                                .sqlite
+                                .set_config("entity_count", &entities.to_string());
+                            let _ = store_c
+                                .sqlite
+                                .set_config("memory_count", &memories.to_string());
+                            tracing::debug!(
+                                entities,
+                                memories,
+                                "vector counts cached in kv_config"
+                            );
+                        }
+                        Err(e) => tracing::warn!("failed to count vectors: {e}"),
+                    }
+                });
+            }
+
             let embedder = Arc::new(
                 Embedder::new(EmbeddingModel::AllMiniLmL6V2)
                     .map_err(|e| anyhow!("failed to init embedder: {e}"))?,

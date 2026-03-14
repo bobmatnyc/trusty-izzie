@@ -158,6 +158,26 @@ impl LanceStore {
         })
     }
 
+    /// Count rows in the `entities` and `memories` tables.
+    ///
+    /// Returns `(entity_count, memory_count)`. Both are 0 on individual table error.
+    pub async fn count_rows(&self) -> Result<(u64, u64)> {
+        let entity_count = self.connection.open_table("entities").execute().await.ok();
+        let memory_count = self.connection.open_table("memories").execute().await.ok();
+
+        let entities = if let Some(t) = entity_count {
+            t.count_rows(None).await.unwrap_or(0) as u64
+        } else {
+            0
+        };
+        let memories = if let Some(t) = memory_count {
+            t.count_rows(None).await.unwrap_or(0) as u64
+        } else {
+            0
+        };
+        Ok((entities, memories))
+    }
+
     /// Upsert an entity by ID (delete-then-add).
     pub async fn upsert_entity(&self, entity: &Entity, embedding: Vec<f32>) -> Result<()> {
         let table = self.connection.open_table("entities").execute().await?;

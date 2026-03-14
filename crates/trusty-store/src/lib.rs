@@ -98,6 +98,13 @@ impl Store {
         })
     }
 
+    /// Count rows in the `entities` and `memories` LanceDB tables.
+    ///
+    /// Returns `(entity_count, memory_count)`. Both are 0 on error.
+    pub async fn count_vectors(&self) -> Result<(u64, u64)> {
+        self.lance.count_rows().await
+    }
+
     /// Open storage backends rooted at `data_dir` with **lazy** KuzuDB init.
     ///
     /// Use this in trusty-daemon: SQLite and LanceDB open immediately, but

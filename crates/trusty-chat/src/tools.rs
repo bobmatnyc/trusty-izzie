@@ -134,6 +134,8 @@ pub enum ToolName {
     SkyvernTask,
     /// Google search with structured results via SerpApi (knowledge graph, rich snippets, local results).
     SerpApiSearch,
+    /// Report Izzie's own operational state: accounts, skills, knowledge base counts, integrations.
+    GetIzzieStatus,
 }
 
 /// A parsed tool call request from the LLM.

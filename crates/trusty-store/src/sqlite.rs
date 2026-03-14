@@ -26,6 +26,27 @@ pub struct PendingAction {
     pub proposed_at: i64,
 }
 
+/// Per-account connection status for `StatusData`.
+#[derive(Debug, Clone)]
+pub struct AccountStatus {
+    pub email: String,
+    pub account_type: String,
+    pub is_active: bool,
+    pub has_oauth_token: bool,
+}
+
+/// Aggregated operational state returned by `get_status_data`.
+#[derive(Debug, Clone)]
+pub struct StatusData {
+    pub accounts: Vec<AccountStatus>,
+    pub active_skills: Vec<String>,
+    pub entity_count: u64,
+    pub memory_count: u64,
+    pub instance_env: String,
+    pub version: String,
+    pub last_sync: Vec<(String, String)>,
+}
+
 pub struct SqliteStore {
     conn: Mutex<Connection>,
 }
@@ -1070,6 +1091,110 @@ impl SqliteStore {
             })
             .optional()?;
         Ok(result)
+    }
+
+    // ── Status data ───────────────────────────────────────────────────────────
+
+    /// Aggregate operational status data for the `get_izzie_status` tool.
+    ///
+    /// `instance_env` — e.g. "prod" or "dev"
+    /// `skills_env_keys` — env var names to probe for active skill detection
+    pub fn get_status_data(
+        &self,
+        instance_env: &str,
+        skills_env_keys: &[&str],
+    ) -> Result<StatusData> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+
+        // Accounts
+        let mut stmt = conn.prepare(
+            "SELECT email, account_type, is_active FROM accounts
+             ORDER BY CASE account_type WHEN 'primary' THEN 0 ELSE 1 END ASC, created_at ASC",
+        )?;
+        let accounts: Vec<AccountStatus> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)? != 0,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .map(|(email, account_type, is_active)| {
+                let has_oauth_token = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM oauth_tokens WHERE user_id = ?1",
+                        rusqlite::params![&email],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0)
+                    > 0;
+                AccountStatus {
+                    email,
+                    account_type,
+                    is_active,
+                    has_oauth_token,
+                }
+            })
+            .collect();
+
+        // kv_config counts
+        let entity_count: u64 = conn
+            .query_row(
+                "SELECT value FROM kv_config WHERE key = 'entity_count'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+
+        let memory_count: u64 = conn
+            .query_row(
+                "SELECT value FROM kv_config WHERE key = 'memory_count'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+
+        // Last sync times from gmail_cursors
+        let mut sync_stmt = conn.prepare("SELECT user_id, last_synced_at FROM gmail_cursors")?;
+        let last_sync: Vec<(String, String)> = sync_stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .map(|(email, ts)| {
+                let dt = chrono::DateTime::from_timestamp(ts, 0)
+                    .map(|d: chrono::DateTime<chrono::Utc>| {
+                        d.format("%Y-%m-%d %H:%M UTC").to_string()
+                    })
+                    .unwrap_or_else(|| ts.to_string());
+                (email, dt)
+            })
+            .collect();
+
+        // Active skills — probe env vars
+        let active_skills: Vec<String> = skills_env_keys
+            .iter()
+            .filter(|k| std::env::var(k).is_ok())
+            .map(|k| k.to_string())
+            .collect();
+
+        Ok(StatusData {
+            accounts,
+            active_skills,
+            entity_count,
+            memory_count,
+            instance_env: instance_env.to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            last_sync,
+        })
     }
 
     // ── Telegram logs ─────────────────────────────────────────────────────────

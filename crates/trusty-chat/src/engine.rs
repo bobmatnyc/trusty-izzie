@@ -262,6 +262,7 @@ impl ChatEngine {
             ToolName::FirecrawlScrape => self.tool_firecrawl_scrape(input).await,
             ToolName::SkyvernTask => self.tool_skyvern_task(input).await,
             ToolName::SerpApiSearch => self.tool_serpapi_search(input).await,
+            ToolName::GetIzzieStatus => self.tool_get_status().await,
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -524,6 +525,119 @@ impl ChatEngine {
 
     fn tool_get_version(&self) -> Result<String> {
         Ok(format!("trusty-izzie v{}", env!("CARGO_PKG_VERSION")))
+    }
+
+    async fn tool_get_status(&self) -> Result<String> {
+        use trusty_store::sqlite::StatusData;
+
+        let skills_keys: &[&str] = &[
+            "TAVILY_API_KEY",
+            "BRAVE_SEARCH_API_KEY",
+            "FIRECRAWL_API_KEY",
+            "SERPAPI_API_KEY",
+            "SKYVERN_API_KEY",
+        ];
+        let instance_env = std::env::var("TRUSTY_ENV").unwrap_or_else(|_| "prod".to_string());
+
+        let data: StatusData = self
+            .sqlite
+            .as_deref()
+            .and_then(|s| s.get_status_data(&instance_env, skills_keys).ok())
+            .unwrap_or_else(|| StatusData {
+                accounts: vec![],
+                active_skills: vec![],
+                entity_count: 0,
+                memory_count: 0,
+                instance_env: instance_env.clone(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                last_sync: vec![],
+            });
+
+        let mut lines: Vec<String> = vec![];
+        lines.push(format!(
+            "**Izzie v{}** ({})",
+            data.version,
+            data.instance_env.to_uppercase()
+        ));
+        lines.push(String::new());
+
+        // Accounts
+        lines.push("**Gmail Accounts:**".to_string());
+        for acct in &data.accounts {
+            let status = if acct.has_oauth_token {
+                "connected"
+            } else {
+                "not authorized"
+            };
+            let sync = data
+                .last_sync
+                .iter()
+                .find(|(e, _)| e == &acct.email)
+                .map(|(_, t)| format!(", last sync: {}", t))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {} ({}) — {}{}",
+                acct.email, acct.account_type, status, sync
+            ));
+        }
+        if data.accounts.is_empty() {
+            lines.push("  No accounts configured".to_string());
+        }
+        lines.push(String::new());
+
+        // Knowledge base
+        lines.push(format!(
+            "**Knowledge base:** {} entities, {} memories",
+            data.entity_count, data.memory_count
+        ));
+        lines.push(String::new());
+
+        // Skills
+        lines.push("**Active skills:**".to_string());
+        let skill_map: &[(&str, &str)] = &[
+            ("TAVILY_API_KEY", "Tavily Search"),
+            ("BRAVE_SEARCH_API_KEY", "Brave Search"),
+            ("FIRECRAWL_API_KEY", "Firecrawl (Web Scrape)"),
+            ("SERPAPI_API_KEY", "SerpApi (Google Search)"),
+            ("SKYVERN_API_KEY", "Skyvern (Browser Automation)"),
+        ];
+        let active_names: Vec<&str> = skill_map
+            .iter()
+            .filter(|(key, _)| std::env::var(key).is_ok())
+            .map(|(_, name)| *name)
+            .collect();
+        if active_names.is_empty() {
+            lines.push("  None configured".to_string());
+        } else {
+            for name in active_names {
+                lines.push(format!("  + {}", name));
+            }
+        }
+        lines.push(String::new());
+
+        // Integrations
+        lines.push("**Integrations:**".to_string());
+        let slack_ok = std::env::var("SLACK_BOT_TOKEN").is_ok();
+        let telegram_ok = self
+            .sqlite
+            .as_deref()
+            .and_then(|s| s.get_config("telegram_bot_token").ok())
+            .flatten()
+            .is_some()
+            || std::env::var("TELEGRAM_BOT_TOKEN").is_ok();
+        let google_calendar = std::env::var("GOOGLE_CLIENT_ID").is_ok()
+            && data.accounts.iter().any(|a| a.has_oauth_token);
+        lines.push(format!(
+            "  {} Telegram",
+            if telegram_ok { "+" } else { "-" }
+        ));
+        lines.push(format!("  {} Slack", if slack_ok { "+" } else { "-" }));
+        lines.push(format!(
+            "  {} Google Calendar/Tasks",
+            if google_calendar { "+" } else { "-" }
+        ));
+
+        Ok(lines.join("\n"))
     }
 
     async fn tool_submit_github_issue(&self, input: &serde_json::Value) -> Result<String> {
@@ -2981,7 +3095,7 @@ I am trusty-izzie v{}, running as macOS launchd services:
 - API (com.trusty-izzie.api) — REST API on port 3456
 - Telegram (com.trusty-izzie.telegram) — Telegram bot on port 3457
 
-I can check my own service status with `check_service_status`, report my version with `get_version`, and file GitHub issues with `submit_github_issue`.
+I can check my own service status with `check_service_status`, report my version with `get_version`, file GitHub issues with `submit_github_issue`, and query my full operational state with `get_izzie_status`.
 
 ## What I Can Do
 - **Skills discovery**: Use `search_skills` when unsure whether a capability exists — e.g. search "train" to find commute tools, "calendar" for scheduling tools.
@@ -3002,6 +3116,7 @@ I can check my own service status with `check_service_status`, report my version
 
 ## Available Tools (complete list)
 - `check_service_status` — report running status of all trusty-izzie launchd services
+- `get_izzie_status` — full operational status: connected accounts, active skills, knowledge base counts, integration health
 - `get_version` — return the current binary version
 - `submit_github_issue` — file a GitHub issue via the `gh` CLI
 - `schedule_event` — schedule a background task (email_sync, contacts_sync, memory_decay, reminder, agent_run, etc.)
@@ -3041,6 +3156,7 @@ I can check my own service status with `check_service_status`, report my version
 - `firecrawl_scrape`: Extract a web page as clean markdown via Firecrawl. Required: url (string). Caps output at 4000 chars. Use when a user shares a URL to read, or after web_search to read a full article. No-op if FIRECRAWL_API_KEY is not set.
 - `skyvern_task`: Browser automation via Skyvern. Required: url (string), goal (string — what to do on the page). Optional: extract (string — what data to extract). Polls up to 60s; returns extracted_information on completion. No-op if SKYVERN_API_KEY is not set.
 - `serpapi_search`: Google search via SerpApi with structured results. Required: query (string). Optional: engine (google|bing|youtube|scholar, default: google). Returns answer box, knowledge graph, and organic results. No-op if SERPAPI_API_KEY is not set.
+- `get_izzie_status`: Check Izzie's operational status — connected Gmail accounts, active skills, integration health, knowledge base size. Call when user asks "are you connected?", "what accounts do you have?", "what can you do?", "what skills are active?", or similar.
 - `create_skill`: Design and build a new skill. Uses Opus to architect the skill spec and Sonnet to write the Python implementation. Required: name (kebab-case, e.g. "hacker-news"), description (plain English — what it fetches, which APIs, etc.). The skill is available on the next turn.
 
 ## Acting on Your Behalf (Search + Act)
@@ -3103,6 +3219,7 @@ NEVER fabricate factual information. For these topics you MUST call the appropri
 - Tasks / to-dos → `get_tasks_bulk` (preferred) or `get_task_lists` + `get_tasks`
 - Google accounts → `list_accounts`
 - Service health / running processes → `check_service_status`
+- Connection status, linked accounts, active skills, integration health → `get_izzie_status`
 - Any file system, shell, or system state query → `execute_shell_command`
 - User preferences → `get_preferences`
 - Contact info (phone, email, address) → `search_contacts` ALWAYS before answering
