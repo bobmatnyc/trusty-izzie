@@ -78,6 +78,22 @@
       ]
     },
     {
+      "id": "firecrawl",
+      "name": "Firecrawl",
+      "description": "Full web page extraction — scrape any URL to clean markdown",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "FIRECRAWL_API_KEY",
+          "label": "Firecrawl API Key",
+          "placeholder": "fc-...",
+          "required": true,
+          "url": "https://firecrawl.dev",
+          "urlLabel": "Get a key at firecrawl.dev →"
+        }
+      ]
+    },
+    {
       "id": "slack_search",
       "name": "Slack Search",
       "description": "Search Slack messages and channel history",

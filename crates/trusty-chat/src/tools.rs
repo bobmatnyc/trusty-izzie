@@ -126,6 +126,10 @@ pub enum ToolName {
     ApproveAction,
     /// Reject a pending action by ID.
     RejectAction,
+    /// AI-optimized web search via Tavily (returns direct answer + sources).
+    TavilySearch,
+    /// Full web page extraction via Firecrawl (returns clean markdown).
+    FirecrawlScrape,
 }
 
 /// A parsed tool call request from the LLM.

@@ -249,6 +249,8 @@ impl ChatEngine {
             ToolName::ListPendingActions => self.tool_list_pending_actions(),
             ToolName::ApproveAction => self.tool_approve_action(input).await,
             ToolName::RejectAction => self.tool_reject_action(input),
+            ToolName::TavilySearch => self.tool_tavily_search(input).await,
+            ToolName::FirecrawlScrape => self.tool_firecrawl_scrape(input).await,
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -1207,6 +1209,102 @@ impl ChatEngine {
                 ""
             }
         ))
+    }
+
+    /// Search via Tavily AI-optimized search API.
+    async fn tool_tavily_search(&self, input: &serde_json::Value) -> Result<String> {
+        let api_key = match std::env::var("TAVILY_API_KEY") {
+            Ok(k) => k,
+            Err(_) => return Ok("Tavily not configured (TAVILY_API_KEY missing)".to_string()),
+        };
+        let query = input["query"]
+            .as_str()
+            .context("Missing required parameter: query")?;
+
+        let response: serde_json::Value = reqwest::Client::new()
+            .post("https://api.tavily.com/search")
+            .json(&serde_json::json!({
+                "api_key": api_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": 5,
+                "include_answer": true
+            }))
+            .send()
+            .await
+            .context("Tavily request failed")?
+            .error_for_status()
+            .context("Tavily API error")?
+            .json()
+            .await
+            .context("Failed to parse Tavily response")?;
+
+        let mut parts: Vec<String> = vec![];
+        if let Some(answer) = response["answer"].as_str() {
+            if !answer.is_empty() {
+                parts.push(format!("**Answer**: {answer}\n"));
+            }
+        }
+        if let Some(results) = response["results"].as_array() {
+            for r in results {
+                let title = r["title"].as_str().unwrap_or("(no title)");
+                let url = r["url"].as_str().unwrap_or("");
+                let snippet = r["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .take(200)
+                    .collect::<String>();
+                parts.push(format!("- [{title}]({url}): {snippet}"));
+            }
+        }
+        if parts.is_empty() {
+            Ok(format!("No results found for: {query}"))
+        } else {
+            Ok(parts.join("\n"))
+        }
+    }
+
+    /// Scrape a URL to clean markdown via Firecrawl.
+    async fn tool_firecrawl_scrape(&self, input: &serde_json::Value) -> Result<String> {
+        let api_key = match std::env::var("FIRECRAWL_API_KEY") {
+            Ok(k) => k,
+            Err(_) => return Ok("Firecrawl not configured (FIRECRAWL_API_KEY missing)".to_string()),
+        };
+        let url = input["url"]
+            .as_str()
+            .context("Missing required parameter: url")?;
+
+        let response: serde_json::Value = reqwest::Client::new()
+            .post("https://api.firecrawl.dev/v1/scrape")
+            .header("Authorization", format!("Bearer {api_key}"))
+            .json(&serde_json::json!({
+                "url": url,
+                "formats": ["markdown"]
+            }))
+            .send()
+            .await
+            .context("Firecrawl request failed")?
+            .error_for_status()
+            .context("Firecrawl API error")?
+            .json()
+            .await
+            .context("Failed to parse Firecrawl response")?;
+
+        let markdown = response["data"]["markdown"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if markdown.is_empty() {
+            return Ok(format!("No content extracted from {url}"));
+        }
+        const MAX_CHARS: usize = 4000;
+        if markdown.len() > MAX_CHARS {
+            let truncated: String = markdown.chars().take(MAX_CHARS).collect();
+            Ok(format!("{truncated}\n\n[truncated — ask me to continue]"))
+        } else {
+            Ok(markdown)
+        }
     }
 
     async fn fetch_calendar_events_for(&self, email: &str, days: i64) -> Result<Vec<String>> {
@@ -2489,6 +2587,8 @@ I can check my own service status with `check_service_status`, report my version
 - **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
 - **Weather**: I fetch real-time forecasts via `get_weather` (Open-Meteo, no API key) and active NWS severe weather alerts via `get_weather_alerts`. Default location is Hastings-on-Hudson, NY.
 - **Web Search**: I can search the web in real time via `web_search` (Brave Search API). Use this for current events, news, prices, and any information that may have changed since my training cutoff.
+- **Tavily Search**: Use `tavily_search` for research questions and current events when you want a direct AI-synthesized answer plus cited sources. Requires `TAVILY_API_KEY`.
+- **Firecrawl Scrape**: Use `firecrawl_scrape` when the user shares a URL and wants its full content extracted, or when `web_search` returns a URL worth reading in full. Returns clean markdown. Requires `FIRECRAWL_API_KEY`.
 - **Unified Search**: Use `search_all` to search across ALL sources simultaneously — memories, iMessage, Slack, calendar, tasks, and web — in a single call.
 - **Email drafting**: I can draft emails and replies on your behalf using `send_email` / `reply_email`. All emails go into an approval queue — I show you the draft and wait for `approve <id>` before sending.
 - **Task creation**: I can create Google Tasks directly via `create_task` (no approval needed).
@@ -2531,6 +2631,8 @@ I can check my own service status with `check_service_status`, report my version
 - `search_skills`: Discover available skills by keyword. Required: query (string). Returns matching skill names, descriptions, and tool names. Use when unsure if a capability exists.
 - `web_search`: Search the web using Brave Search. Required: query (string). Optional: count (default 5, max 10). Returns titles, descriptions, and URLs of top results.
 - `fetch_page`: Fetch and read the text content of a URL. Required: url (string). Optional: max_chars (default 3000, max 8000). Use after web_search to get full article/review content.
+- `tavily_search`: AI-optimized web search via Tavily. Required: query (string). Returns a direct synthesized answer (if available) followed by top results as `- [title](url): snippet`. Best for research questions and current events. No-op if TAVILY_API_KEY is not set.
+- `firecrawl_scrape`: Extract a web page as clean markdown via Firecrawl. Required: url (string). Caps output at 4000 chars. Use when a user shares a URL to read, or after web_search to read a full article. No-op if FIRECRAWL_API_KEY is not set.
 - `create_skill`: Design and build a new skill. Uses Opus to architect the skill spec and Sonnet to write the Python implementation. Required: name (kebab-case, e.g. "hacker-news"), description (plain English — what it fetches, which APIs, etc.). The skill is available on the next turn.
 
 ## Acting on Your Behalf (Search + Act)
@@ -2602,7 +2704,8 @@ NEVER fabricate factual information. For these topics you MUST call the appropri
 - Train delays / service alerts → `get_train_alerts` ALWAYS
 - Weather / forecast / temperature / rain / snow → `get_weather` ALWAYS; never guess weather from training data
 - Severe weather / storm warnings / alerts → `get_weather_alerts`
-- Current events, news, real-time information, prices → `web_search`
+- Current events, news, real-time information, prices → `web_search` or `tavily_search`
+- User pastes a URL and asks to read/summarize it → `firecrawl_scrape`
 
 If a tool returns no data (e.g. no calendar events), say so honestly. Never invent meetings, contacts, emails, or any factual data.
 
