@@ -20,6 +20,27 @@ pub struct AppConfig {
     /// Agent system settings.
     #[serde(default)]
     pub agents: AgentsConfig,
+    /// Instance identity (env + label for dev/prod separation).
+    #[serde(default)]
+    pub instance: InstanceConfig,
+}
+
+/// Instance identity — distinguishes dev from prod instances.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstanceConfig {
+    /// "dev" or "prod"
+    pub env: String,
+    /// Human-readable label shown in UI and system prompts (e.g. "DEV").
+    pub label: String,
+}
+
+impl Default for InstanceConfig {
+    fn default() -> Self {
+        Self {
+            env: "prod".to_string(),
+            label: String::new(),
+        }
+    }
 }
 
 /// OpenRouter API configuration.

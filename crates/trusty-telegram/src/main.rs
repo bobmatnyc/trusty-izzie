@@ -1729,7 +1729,25 @@ async fn run_poll(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenvy::dotenv().ok();
+    // Load env file based on TRUSTY_ENV.
+    // Dev: ~/.config/trusty-izzie-dev/config.env (fallback: .env in cwd)
+    // Prod: ~/.config/trusty-izzie/config.env (fallback: .env in cwd)
+    {
+        let is_dev = std::env::var("TRUSTY_ENV")
+            .map(|v| v == "dev")
+            .unwrap_or(false);
+        let home = std::env::var("HOME").unwrap_or_default();
+        let config_env_path = if is_dev {
+            std::path::PathBuf::from(&home).join(".config/trusty-izzie-dev/config.env")
+        } else {
+            std::path::PathBuf::from(&home).join(".config/trusty-izzie/config.env")
+        };
+        if config_env_path.exists() {
+            dotenvy::from_path(&config_env_path).ok();
+        } else {
+            dotenvy::dotenv().ok();
+        }
+    }
     trusty_core::secrets::migrate_from_env();
 
     let cli = Cli::parse();
@@ -1824,13 +1842,35 @@ async fn main() -> Result<()> {
                 .with_sqlite(Arc::clone(&store.sqlite))
                 .with_agents_dir(data_dir.join("agents"))
                 .with_skills_dir(config.agents.skills_dir.clone())
+                .with_instance_label(config.instance.label.clone())
                 .with_skills(vec![
                     std::sync::Arc::new(MetroNorthSkill),
                     std::sync::Arc::new(WeatherSkill),
                 ]),
             );
 
-            // Seed the primary account (idempotent).
+            // Seed all configured Gmail accounts (idempotent).
+            // TRUSTY_GMAIL_ACCOUNTS is a comma-separated list; falls back to TRUSTY_PRIMARY_EMAIL.
+            let gmail_accounts: Vec<String> = {
+                let from_env = std::env::var("TRUSTY_GMAIL_ACCOUNTS").unwrap_or_default();
+                let mut list: Vec<String> = from_env
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if list.is_empty() && !primary_email.is_empty() {
+                    list.push(primary_email.clone());
+                }
+                list
+            };
+            for (i, email) in gmail_accounts.iter().enumerate() {
+                let account_type = if i == 0 { "primary" } else { "secondary" };
+                if let Err(e) = store.sqlite.add_account(email, Some(email), account_type) {
+                    // add_account uses INSERT OR IGNORE semantics; log but don't fail.
+                    warn!("Failed to seed account {email}: {e}");
+                }
+            }
+            // Legacy: also call seed_primary_account for backward compat with existing data.
             if let Err(e) = store.sqlite.seed_primary_account(&primary_email) {
                 warn!("Failed to seed primary account: {e}");
             }

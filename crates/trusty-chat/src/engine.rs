@@ -37,6 +37,8 @@ pub struct ChatEngine {
     skills_dir: String,
     /// Dynamically registered skills (tool dispatch + system prompt contributions).
     skills: Vec<std::sync::Arc<dyn trusty_skill::Skill>>,
+    /// Optional instance label injected into the system prompt (e.g. "DEV").
+    instance_label: String,
 }
 
 // ── OpenRouter request/response types ────────────────────────────────────────
@@ -121,7 +123,14 @@ impl ChatEngine {
             agents_dir: PathBuf::from("docs/agents"),
             skills_dir: "docs/skills".to_string(),
             skills: vec![],
+            instance_label: String::new(),
         }
+    }
+
+    /// Set the instance label (e.g. "DEV") shown in the system prompt.
+    pub fn with_instance_label(mut self, label: String) -> Self {
+        self.instance_label = label;
+        self
     }
 
     /// Attach a `SqliteStore` for event-queue tool dispatch.
@@ -2494,7 +2503,7 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
                     .or_else(|| s.get_config("communication_style_personal").ok().flatten())
             })
             .unwrap_or_default();
-        let system_content = system_prompt(
+        let system_content = system_prompt_inner(
             now,
             &context_section,
             &accounts_context,
@@ -2502,6 +2511,7 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
             &skills_content,
             &user_location,
             &communication_style,
+            &self.instance_label,
         );
 
         // 3. Build the LLM message array from session history.
@@ -2849,6 +2859,7 @@ fn detect_skill_activation(msg: &str) -> Option<(String, String)> {
     None
 }
 
+#[cfg(test)]
 fn system_prompt(
     now: chrono::DateTime<chrono::Utc>,
     context: &str,
@@ -2858,9 +2869,40 @@ fn system_prompt(
     user_location: &str,
     communication_style: &str,
 ) -> String {
+    system_prompt_inner(
+        now,
+        context,
+        accounts_ctx,
+        current_prefs,
+        skills_content,
+        user_location,
+        communication_style,
+        "",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn system_prompt_inner(
+    now: chrono::DateTime<chrono::Utc>,
+    context: &str,
+    accounts_ctx: &str,
+    current_prefs: &[(String, String)],
+    skills_content: &str,
+    user_location: &str,
+    communication_style: &str,
+    instance_label: &str,
+) -> String {
     let user_email =
         std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_else(|_| PRIMARY_EMAIL.to_string());
     let user_name = std::env::var("TRUSTY_USER_NAME").unwrap_or_else(|_| "Masa".to_string());
+    let dev_badge = if !instance_label.is_empty() {
+        format!(
+            "**INSTANCE: {}** — You are running in a development/test instance. Data and conversations here are for testing only.\n\n",
+            instance_label
+        )
+    } else {
+        String::new()
+    };
     let context_section = if context.is_empty() {
         String::new()
     } else {
@@ -2904,7 +2946,7 @@ fn system_prompt(
         }
     };
     format!(
-        r#"You are trusty-izzie, a personal AI assistant with deep knowledge of the user's professional relationships and work context. You run locally on the user's machine.
+        r#"{dev_badge}You are trusty-izzie, a personal AI assistant with deep knowledge of the user's professional relationships and work context. You run locally on the user's machine.
 
 Today is {}. Current time: {}.
 
