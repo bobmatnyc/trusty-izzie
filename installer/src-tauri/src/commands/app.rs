@@ -1,5 +1,16 @@
 use std::collections::HashMap;
 
+fn config_path() -> Result<std::path::PathBuf, String> {
+    let dir = match crate::INSTANCE_ENV {
+        "dev" => ".config/trusty-izzie-dev",
+        _ => ".config/trusty-izzie",
+    };
+    Ok(dirs::home_dir()
+        .ok_or("no home dir")?
+        .join(dir)
+        .join("config.env"))
+}
+
 fn store_secret(key: &str, value: &str) -> Result<(), String> {
     // Delete existing
     let _ = std::process::Command::new("security")
@@ -38,21 +49,19 @@ pub struct AppConfig {
     pub skills_enabled: Vec<String>,
 }
 
-/// Check if Izzie is already installed (config.env exists)
+/// Check if Izzie is already installed (config.env exists for this instance)
 #[tauri::command]
 pub async fn check_installed() -> Result<bool, String> {
-    let path = dirs::home_dir()
-        .ok_or("no home dir")?
-        .join(".config/trusty-izzie/config.env");
-    Ok(path.exists())
+    let home = dirs::home_dir().ok_or("no home dir")?;
+    let prod_config = home.join(".config/trusty-izzie/config.env");
+    let dev_config = home.join(".config/trusty-izzie-dev/config.env");
+    Ok(prod_config.exists() || dev_config.exists())
 }
 
 /// Read existing config.env into AppConfig
 #[tauri::command]
 pub async fn read_config() -> Result<AppConfig, String> {
-    let path = dirs::home_dir()
-        .ok_or("no home dir")?
-        .join(".config/trusty-izzie/config.env");
+    let path = config_path()?;
 
     let content = tokio::fs::read_to_string(&path)
         .await
@@ -116,9 +125,7 @@ pub async fn open_in_finder(path: String) -> Result<(), String> {
 /// Reset config (delete config.env only, never data dir)
 #[tauri::command]
 pub async fn reset_config() -> Result<(), String> {
-    let path = dirs::home_dir()
-        .ok_or("no home dir")?
-        .join(".config/trusty-izzie/config.env");
+    let path = config_path()?;
     if path.exists() {
         tokio::fs::remove_file(&path)
             .await
@@ -133,9 +140,7 @@ pub async fn update_skills(
     enabled: Vec<String>,
     keys: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
-    let path = dirs::home_dir()
-        .ok_or("no home dir")?
-        .join(".config/trusty-izzie/config.env");
+    let path = config_path()?;
 
     let content = tokio::fs::read_to_string(&path)
         .await

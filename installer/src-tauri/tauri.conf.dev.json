@@ -1,0 +1,9 @@
+{
+  "productName": "Izzie Dev",
+  "identifier": "com.trusty-izzie.dev",
+  "bundle": {
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

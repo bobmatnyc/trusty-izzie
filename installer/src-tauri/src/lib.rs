@@ -3,6 +3,16 @@ mod installer;
 
 use commands::{app, config, daemon, oauth};
 
+#[cfg(feature = "dev-instance")]
+pub const INSTANCE_ENV: &str = "dev";
+#[cfg(not(feature = "dev-instance"))]
+pub const INSTANCE_ENV: &str = "prod";
+
+#[tauri::command]
+fn get_instance_env() -> &'static str {
+    INSTANCE_ENV
+}
+
 #[tauri::command]
 async fn check_rust_installed() -> Result<String, String> {
     installer::check_rust().await.map_err(|e| e.to_string())
@@ -36,6 +46,7 @@ pub fn run() {
             app::open_in_finder,
             app::reset_config,
             app::update_skills,
+            get_instance_env,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

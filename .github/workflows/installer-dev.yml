@@ -1,0 +1,57 @@
+name: Build Installer (Dev)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'installer/**'
+      - 'crates/**'
+      - '.github/workflows/installer-dev.yml'
+  workflow_dispatch:
+
+jobs:
+  build-dev:
+    name: Build dev DMG (universal)
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable (universal targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: installer/src-tauri -> target
+
+      - name: Install Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: installer/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: installer
+        run: npm ci
+
+      - name: Build dev installer (ad-hoc signed)
+        working-directory: installer
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npx tauri build --target universal-apple-darwin \
+            --config src-tauri/tauri.conf.dev.json \
+            --features dev-instance
+
+      - name: Upload dev DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: izzie-dev-dmg
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          retention-days: 7
