@@ -119,10 +119,16 @@ async fn run_once(state: &Arc<SlackState>, app_token: &str) -> Result<()> {
                     }
                 };
 
-                // Always ACK first — Slack requires < 3 s.
-                let ack = serde_json::json!({ "envelope_id": envelope.envelope_id }).to_string();
-                if let Err(e) = write.send(Message::Text(ack)).await {
-                    warn!("Failed to send ACK: {e}");
+                // ACK only envelopes that carry an envelope_id (events_api,
+                // interactive, slash_commands). hello/disconnect have no id;
+                // sending {"envelope_id":""} confuses Slack and causes it to
+                // close the connection every ~5 s.
+                if !envelope.envelope_id.is_empty() {
+                    let ack =
+                        serde_json::json!({ "envelope_id": envelope.envelope_id }).to_string();
+                    if let Err(e) = write.send(Message::Text(ack)).await {
+                        warn!("Failed to send ACK: {e}");
+                    }
                 }
 
                 // Skip retries to avoid double-processing.
