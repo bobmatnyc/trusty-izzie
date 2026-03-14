@@ -6,7 +6,7 @@
       "description": "Search the web via Brave Search API",
       "keys": [
         {
-          "env": "BRAVE_API_KEY",
+          "env": "BRAVE_SEARCH_API_KEY",
           "label": "Brave Search API Key",
           "placeholder": "BSA...",
           "required": true,
@@ -62,27 +62,36 @@
       "keys": []
     },
     {
-      "id": "tavily",
-      "name": "Tavily AI Search",
-      "description": "Enhanced web research with full-page answers and citations",
-      "scope_summary": "Searches the public web via Tavily API",
+      "id": "web-search",
+      "name": "Web Search",
+      "description": "Real-time web search with AI summaries. Uses Tavily for AI-enhanced results; falls back to Brave Search.",
+      "scope_summary": "Searches the live web using Tavily and/or Brave. Queries and URLs leave your device.",
       "tags": ["API key required"],
+      "requires_any_key": true,
       "keys": [
         {
           "env": "TAVILY_API_KEY",
           "label": "Tavily API Key",
           "placeholder": "tvly-...",
-          "required": true,
+          "required": false,
           "url": "https://app.tavily.com",
           "urlLabel": "Get a key at app.tavily.com →"
+        },
+        {
+          "env": "BRAVE_SEARCH_API_KEY",
+          "label": "Brave Search API Key",
+          "placeholder": "BSA...",
+          "required": false,
+          "url": "https://api.search.brave.com/register",
+          "urlLabel": "Get a free key at api.search.brave.com →"
         }
       ]
     },
     {
-      "id": "firecrawl",
-      "name": "Firecrawl Web Scraping",
-      "description": "Full web page extraction — scrape any URL to clean markdown",
-      "scope_summary": "Fetches and extracts full content from any URL",
+      "id": "web-scrape",
+      "name": "Web Scrape",
+      "description": "Full-page web scraping and content extraction. Retrieves and cleans complete article text, blog posts, and documentation from any URL.",
+      "scope_summary": "Fetches full page content from URLs via Firecrawl. Only URLs leave your device.",
       "tags": ["API key required"],
       "keys": [
         {
@@ -90,16 +99,33 @@
           "label": "Firecrawl API Key",
           "placeholder": "fc-...",
           "required": true,
-          "url": "https://firecrawl.dev",
+          "url": "https://www.firecrawl.dev",
           "urlLabel": "Get a key at firecrawl.dev →"
         }
       ]
     },
     {
-      "id": "skyvern",
-      "name": "Skyvern Browser Automation",
-      "description": "Browser automation — navigate websites, fill forms, extract data",
-      "scope_summary": "Controls a browser to interact with websites on your behalf",
+      "id": "google-search",
+      "name": "Google Search",
+      "description": "Google-quality search via SerpApi. Returns structured results including knowledge graph, answer boxes, shopping, news, and YouTube results.",
+      "scope_summary": "Google-quality structured search via SerpApi. Search queries leave your device.",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "SERPAPI_API_KEY",
+          "label": "SerpApi API Key",
+          "placeholder": "f9938a...",
+          "required": true,
+          "url": "https://serpapi.com",
+          "urlLabel": "Get a key at serpapi.com →"
+        }
+      ]
+    },
+    {
+      "id": "browser-automation",
+      "name": "Browser Automation",
+      "description": "AI browser agent that navigates websites, fills forms, clicks buttons, and extracts data. For complex web tasks requiring interaction.",
+      "scope_summary": "Controls a browser to interact with websites on your behalf via Skyvern.",
       "tags": ["API key required"],
       "keys": [
         {
@@ -109,23 +135,6 @@
           "required": true,
           "url": "https://app.skyvern.com",
           "urlLabel": "Get a key at app.skyvern.com →"
-        }
-      ]
-    },
-    {
-      "id": "serpapi",
-      "name": "SerpApi Search",
-      "description": "Google search with structured results — knowledge graph, rich snippets, local results",
-      "scope_summary": "Fetches Google search results in structured format",
-      "tags": ["API key required"],
-      "keys": [
-        {
-          "env": "SERPAPI_API_KEY",
-          "label": "SerpApi API Key",
-          "placeholder": "serpapi-...",
-          "required": true,
-          "url": "https://serpapi.com/manage-api-key",
-          "urlLabel": "Get a key at serpapi.com →"
         }
       ]
     },

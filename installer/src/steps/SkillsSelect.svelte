@@ -18,6 +18,7 @@
     scope_summary?: string
     tags?: string[]
     keys: SkillKey[]
+    requires_any_key?: boolean
   }
 
   export type SkillsManifest = {
@@ -92,7 +93,12 @@
     const missing: string[] = []
     const allSkills = [...manifest.bundled, ...manifest.optional]
     for (const skill of allSkills) {
-      if (enabled.has(skill.id)) {
+      if (!enabled.has(skill.id)) continue
+      if (skill.requires_any_key) {
+        // At least one key must be filled
+        const hasAny = skill.keys.some((k: SkillKey) => keyValues[k.env]?.trim())
+        if (!hasAny) missing.push(skill.keys[0].env)
+      } else {
         for (const k of skill.keys) {
           if (k.required && !keyValues[k.env]?.trim()) missing.push(k.env)
         }
@@ -208,11 +214,18 @@
               </div>
               {#if isEnabled && skill.keys.length > 0}
                 <div class="key-fields">
+                  {#if skill.requires_any_key}
+                    <span class="key-hint">At least one key required — having both enables automatic fallback.</span>
+                  {/if}
                   {#each skill.keys as key}
                     <div class="key-field">
                       <label for="key-opt-{key.env}">
                         {key.label}
-                        {#if key.required}<span class="required">*</span>{/if}
+                        {#if skill.requires_any_key}
+                          <span class="optional-badge">(optional)</span>
+                        {:else if key.required}
+                          <span class="required">*</span>
+                        {/if}
                       </label>
                       <input
                         id="key-opt-{key.env}"
@@ -327,6 +340,8 @@
   .key-field { display: flex; flex-direction: column; gap: 5px; }
   .key-field label { font-size: 12px; font-weight: 500; color: #374151; }
   .required { color: #dc2626; margin-left: 2px; }
+  .optional-badge { font-size: 11px; color: #9ca3af; font-weight: 400; margin-left: 4px; }
+  .key-hint { font-size: 11px; color: #6b7280; font-style: italic; }
   .key-link { font-size: 11px; color: #2563eb; text-decoration: none; }
   .key-link:hover { text-decoration: underline; }
   .key-scopes { font-size: 11px; color: #9ca3af; font-style: italic; }

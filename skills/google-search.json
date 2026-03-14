@@ -1,0 +1,31 @@
+{
+  "id": "google-search",
+  "name": "Google Search",
+  "description": "Google-quality search via SerpApi. Returns structured results including knowledge graph, answer boxes, shopping, news, and YouTube results. More structured than Tavily; best for queries needing Google's ranking specifically.",
+  "scope": {
+    "capabilities": [
+      "Run Google searches and get structured results",
+      "Access featured snippets, answer boxes, and knowledge graph",
+      "Search Bing, YouTube, Google Scholar, and 50+ other engines",
+      "Get shopping results, local results, and news"
+    ],
+    "outbound_requests": ["serpapi.com"],
+    "data_sent": ["Search query text"],
+    "data_NOT_sent": ["Email contents", "personal files", "calendar data", "Slack messages"],
+    "privacy_level": "low",
+    "note": "SerpApi supports 50+ search engines. The SERPAPI_API_KEY enables them all."
+  },
+  "keys": [
+    {
+      "env_key": "SERPAPI_API_KEY",
+      "label": "SerpApi API Key",
+      "required": true,
+      "get_key_url": "https://serpapi.com",
+      "get_key_instructions": "Sign up at serpapi.com → Dashboard → API Key",
+      "placeholder": "f9938a..."
+    }
+  ],
+  "installer": {
+    "scope_summary": "Google-quality structured search via SerpApi. Search queries leave your device."
+  }
+}

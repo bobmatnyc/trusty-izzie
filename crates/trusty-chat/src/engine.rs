@@ -2750,41 +2750,51 @@ const SKILL_CATALOG: &[(&str, SkillInfo)] = &[
     (
         "TAVILY_API_KEY",
         SkillInfo {
-            name: "Tavily AI Search",
-            scope_summary: "Searches the public web via Tavily API",
-            privacy_note: "Your queries are sent to Tavily's servers. No personal data is included.",
+            name: "Web Search",
+            scope_summary: "Searches the live web using Tavily and/or Brave. Queries and URLs leave your device.",
+            privacy_note: "Search queries are sent to Tavily's servers. No personal data is included.",
             get_key_url: "https://app.tavily.com",
-            activate_name: "tavily",
+            activate_name: "web search",
+        },
+    ),
+    (
+        "BRAVE_SEARCH_API_KEY",
+        SkillInfo {
+            name: "Web Search",
+            scope_summary: "Searches the live web using Tavily and/or Brave. Queries and URLs leave your device.",
+            privacy_note: "Search queries are sent to Brave's servers. No personal data is included.",
+            get_key_url: "https://api.search.brave.com/register",
+            activate_name: "web search",
         },
     ),
     (
         "FIRECRAWL_API_KEY",
         SkillInfo {
-            name: "Firecrawl Web Scraping",
-            scope_summary: "Fetches and extracts full content from any URL",
-            privacy_note: "The URL you provide is sent to Firecrawl's servers for fetching.",
-            get_key_url: "https://firecrawl.dev",
-            activate_name: "firecrawl",
+            name: "Web Scrape",
+            scope_summary: "Fetches full page content from URLs via Firecrawl. Only URLs leave your device.",
+            privacy_note: "Only the URL is sent to Firecrawl; they don't retain content per their privacy policy.",
+            get_key_url: "https://www.firecrawl.dev",
+            activate_name: "web scrape",
         },
     ),
     (
         "SKYVERN_API_KEY",
         SkillInfo {
-            name: "Skyvern Browser Automation",
-            scope_summary: "Controls a browser to interact with websites on your behalf",
+            name: "Browser Automation",
+            scope_summary: "Controls a browser to interact with websites on your behalf via Skyvern.",
             privacy_note: "Skyvern runs in their cloud. Any credentials or data you provide in task instructions will be processed by their servers.",
             get_key_url: "https://app.skyvern.com",
-            activate_name: "skyvern",
+            activate_name: "browser automation",
         },
     ),
     (
         "SERPAPI_API_KEY",
         SkillInfo {
-            name: "SerpApi Search",
-            scope_summary: "Fetches Google search results in structured format",
+            name: "Google Search",
+            scope_summary: "Google-quality structured search via SerpApi. Search queries leave your device.",
             privacy_note: "Your queries are sent to SerpApi's servers, which proxy Google search.",
             get_key_url: "https://serpapi.com",
-            activate_name: "serpapi",
+            activate_name: "google search",
         },
     ),
 ];
@@ -2826,9 +2836,14 @@ fn detect_skill_activation(msg: &str) -> Option<(String, String)> {
     // Map recognisable aliases to env keys.
     let aliases: &[(&str, &str)] = &[
         ("tavily", "TAVILY_API_KEY"),
+        ("brave", "BRAVE_SEARCH_API_KEY"),
+        ("web search", "TAVILY_API_KEY"),
         ("firecrawl", "FIRECRAWL_API_KEY"),
+        ("web scrape", "FIRECRAWL_API_KEY"),
         ("skyvern", "SKYVERN_API_KEY"),
+        ("browser automation", "SKYVERN_API_KEY"),
         ("serpapi", "SERPAPI_API_KEY"),
+        ("google search", "SERPAPI_API_KEY"),
     ];
 
     for (alias, env_key) in aliases {

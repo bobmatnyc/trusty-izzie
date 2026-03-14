@@ -1,0 +1,31 @@
+{
+  "id": "browser-automation",
+  "name": "Browser Automation",
+  "description": "AI-powered browser agent that can navigate websites, fill forms, click buttons, and extract information. Use for complex web tasks that require interaction.",
+  "scope": {
+    "capabilities": [
+      "Navigate to any website and interact with it",
+      "Fill out forms and click buttons",
+      "Extract structured data from dynamic web pages",
+      "Complete multi-step web workflows"
+    ],
+    "outbound_requests": ["api.skyvern.com", "any website you direct it to"],
+    "data_sent": ["Your task instructions and any input data"],
+    "data_NOT_sent": ["Email contents", "personal files", "calendar data", "Slack messages"],
+    "privacy_level": "medium",
+    "note": "Skyvern runs in their cloud. Any credentials or data you provide in task instructions will be processed by their servers."
+  },
+  "keys": [
+    {
+      "env_key": "SKYVERN_API_KEY",
+      "label": "Skyvern API Key",
+      "required": true,
+      "get_key_url": "https://app.skyvern.com",
+      "get_key_instructions": "Sign up at app.skyvern.com → Settings → API Keys",
+      "placeholder": "eyJ..."
+    }
+  ],
+  "installer": {
+    "scope_summary": "Controls a browser to interact with websites on your behalf via Skyvern."
+  }
+}

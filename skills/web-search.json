@@ -1,0 +1,40 @@
+{
+  "id": "web-search",
+  "name": "Web Search",
+  "description": "Real-time web search with AI summaries. Uses Tavily for AI-enhanced results; falls back to Brave Search. Includes page fetch and content extraction.",
+  "scope": {
+    "capabilities": [
+      "Search the public web for any topic",
+      "Return AI-summarized answers with citations",
+      "Access news, articles, and websites",
+      "Fetch and extract content from specific URLs"
+    ],
+    "outbound_requests": ["api.tavily.com", "api.search.brave.com"],
+    "data_sent": ["Search query text", "URLs to fetch"],
+    "data_NOT_sent": ["Email contents", "personal files", "calendar data", "Slack messages"],
+    "privacy_level": "low",
+    "note": "Queries and URLs leave your device. No personal data is included. Having both keys enables automatic fallback."
+  },
+  "keys": [
+    {
+      "env_key": "TAVILY_API_KEY",
+      "label": "Tavily API Key",
+      "required": false,
+      "get_key_url": "https://app.tavily.com",
+      "get_key_instructions": "Sign up free at app.tavily.com → API Keys → Create key",
+      "placeholder": "tvly-..."
+    },
+    {
+      "env_key": "BRAVE_SEARCH_API_KEY",
+      "label": "Brave Search API Key",
+      "required": false,
+      "get_key_url": "https://api.search.brave.com/register",
+      "get_key_instructions": "Register at api.search.brave.com → Subscriptions → Free tier available",
+      "placeholder": "BSA..."
+    }
+  ],
+  "requires_any_key": true,
+  "installer": {
+    "scope_summary": "Searches the live web using Tavily and/or Brave. Queries and URLs leave your device."
+  }
+}

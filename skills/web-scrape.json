@@ -1,0 +1,30 @@
+{
+  "id": "web-scrape",
+  "name": "Web Scrape",
+  "description": "Full-page web scraping and content extraction. Retrieves and cleans complete article text, blog posts, and documentation from any URL. Used when a URL's full content is needed beyond a search snippet.",
+  "scope": {
+    "capabilities": [
+      "Extract full text content from any webpage",
+      "Convert JavaScript-rendered pages to clean markdown",
+      "Read articles, documentation, and web pages in full"
+    ],
+    "outbound_requests": ["api.firecrawl.dev", "any URL you provide"],
+    "data_sent": ["The URL you ask Izzie to scrape"],
+    "data_NOT_sent": ["Email contents", "personal files", "calendar data", "Slack messages"],
+    "privacy_level": "low",
+    "note": "Only URLs sent to Firecrawl; they don't retain content per their privacy policy."
+  },
+  "keys": [
+    {
+      "env_key": "FIRECRAWL_API_KEY",
+      "label": "Firecrawl API Key",
+      "required": true,
+      "get_key_url": "https://www.firecrawl.dev",
+      "get_key_instructions": "Sign up at firecrawl.dev → Dashboard → API Keys",
+      "placeholder": "fc-..."
+    }
+  ],
+  "installer": {
+    "scope_summary": "Fetches full page content from URLs via Firecrawl. Only URLs leave your device."
+  }
+}
