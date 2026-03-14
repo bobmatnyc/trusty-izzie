@@ -1,103 +1,73 @@
-//! Secrets management via macOS Keychain (security CLI).
+//! Secrets management — reads from environment variables.
 //!
-//! Items are stored with `-T ""` (allow any application) so rebuilding
-//! the binary never triggers a password prompt.
+//! Secrets are loaded at startup via dotenvy from .env / config.env.
+//! The file is chmod 600 (user-read-only). No Keychain, no prompts.
 //!
-//! `get(key)` tries Keychain first, falls back to env var.
-//! `set(key, value)` writes to Keychain with allow-any-app ACL.
-//! `delete(key)` removes from Keychain.
+//! `get(key)` reads from the current process environment.
+//! `set(key, value)` writes to runtime env AND appends to config.env.
+//! `migrate_from_env()` is a no-op (kept for API compatibility).
 
-const SERVICE: &str = "trusty-izzie";
+use std::path::PathBuf;
 
-/// Read a secret: Keychain first, env var fallback.
-pub fn get(key: &str) -> Option<String> {
-    // Try macOS Keychain via security CLI
-    let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            SERVICE,
-            "-a",
-            key,
-            "-w", // print password only
-        ])
-        .output();
-
-    if let Ok(out) = output {
-        if out.status.success() {
-            let val = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !val.is_empty() {
-                return Some(val);
-            }
+fn config_env_path() -> PathBuf {
+    let data_dir = std::env::var("TRUSTY_DATA_DIR")
+        .unwrap_or_else(|_| "~/.local/share/trusty-izzie".to_string());
+    // Manual tilde expansion (no external dep)
+    let expanded = if data_dir.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{}{}", home, &data_dir[1..])
+        } else {
+            data_dir
         }
-    }
+    } else {
+        data_dir
+    };
+    PathBuf::from(expanded).join("config.env")
+}
 
-    // Fall back to environment variable
+/// Read a secret from the process environment.
+pub fn get(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
 
-/// Write a secret to Keychain with allow-any-app ACL (no prompts on read).
+/// Persist a secret to runtime env and config.env.
 pub fn set(key: &str, value: &str) -> Result<(), String> {
-    // Delete existing entry first (update = delete + add)
-    let _ = std::process::Command::new("security")
-        .args(["delete-generic-password", "-s", SERVICE, "-a", key])
-        .output();
+    std::env::set_var(key, value);
 
-    // Add with -T "" = trusted by any application
-    let status = std::process::Command::new("security")
-        .args([
-            "add-generic-password",
-            "-s",
-            SERVICE,
-            "-a",
-            key,
-            "-w",
-            value,
-            "-T",
-            "", // allow any app, no prompts
-        ])
-        .status()
-        .map_err(|e| e.to_string())?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "security add-generic-password failed for key {}",
-            key
-        ))
+    let path = config_env_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-}
 
-/// Delete a secret from Keychain.
-pub fn delete(key: &str) -> Result<(), String> {
-    std::process::Command::new("security")
-        .args(["delete-generic-password", "-s", SERVICE, "-a", key])
-        .status()
-        .map_err(|e| e.to_string())?;
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let prefix = format!("{}=", key);
+    let mut lines: Vec<String> = existing
+        .lines()
+        .filter(|l| !l.starts_with(&prefix))
+        .map(String::from)
+        .collect();
+    lines.push(format!("{}={}", key, value));
+
+    let content = lines.join("\n") + "\n";
+    std::fs::write(&path, &content).map_err(|e| e.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+
     Ok(())
 }
 
-/// On first run: migrate any secrets still in env vars into Keychain.
-/// Safe to call repeatedly (subsequent calls are no-ops for existing entries).
-pub fn migrate_from_env() {
-    for key in SECRET_KEYS {
-        // Only migrate if not already in Keychain
-        let already_stored = std::process::Command::new("security")
-            .args(["find-generic-password", "-s", SERVICE, "-a", key])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        if !already_stored {
-            if let Ok(val) = std::env::var(key) {
-                if !val.is_empty() {
-                    let _ = set(key, &val);
-                }
-            }
-        }
-    }
+/// Remove a secret from the runtime env (does not modify config.env).
+pub fn delete(key: &str) -> Result<(), String> {
+    std::env::remove_var(key);
+    Ok(())
 }
+
+/// No-op — kept for API compatibility.
+pub fn migrate_from_env() {}
 
 pub const SECRET_KEYS: &[&str] = &[
     "OPENROUTER_API_KEY",
