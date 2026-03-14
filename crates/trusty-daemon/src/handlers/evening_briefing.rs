@@ -48,7 +48,7 @@ impl EventHandler for EveningBriefingHandler {
 
         let briefing = generate_evening_briefing(&self.openrouter_base, &self.openrouter_api_key)
             .await
-            .unwrap_or_else(|_| "Good evening! Hope your day went well.".to_string());
+            .unwrap_or_else(|_| "End of day.".to_string());
 
         send_telegram_push(&store.sqlite, &briefing).await?;
         info!("EveningBriefing sent");
@@ -66,7 +66,11 @@ fn schedule_next_evening() -> DispatchResult {
 }
 
 async fn generate_evening_briefing(base: &str, key: &str) -> Result<String, TrustyError> {
-    let prompt = "Generate a brief end-of-day message for a personal AI assistant. 2-3 sentences max. Warm, reflective tone. Wish them a good evening.";
+    let prompt = "Generate a brief end-of-day status report. Bullet points or short sentences. \
+Tone: dispassionate and factual. No pleasantries, no affirmations, no filler. \
+No phrases like \"Hope you're winding down\", \"Great work today\", \"You've been busy\". \
+Lead with the most actionable item. Style: briefing officer reading a sitrep, not a wellness app. \
+2-3 items max.";
     let client = reqwest::Client::new();
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
     let resp = client
@@ -87,6 +91,6 @@ async fn generate_evening_briefing(base: &str, key: &str) -> Result<String, Trus
         .map_err(|e| TrustyError::Serialization(e.to_string()))?;
     Ok(json["choices"][0]["message"]["content"]
         .as_str()
-        .unwrap_or("Good evening!")
+        .unwrap_or("End of day.")
         .to_string())
 }

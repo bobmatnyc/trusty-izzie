@@ -285,7 +285,7 @@ impl EventHandler for MorningBriefingHandler {
 
         let briefing = generate_briefing(&self.openrouter_base, &self.openrouter_api_key, &context)
             .await
-            .unwrap_or_else(|_| "Good morning! Ready to help with your day.".to_string());
+            .unwrap_or_else(|_| "Here are today's priorities.".to_string());
 
         send_telegram_push(&store.sqlite, &briefing).await?;
         info!("MorningBriefing sent");
@@ -320,8 +320,11 @@ async fn generate_briefing(
     };
 
     let prompt = format!(
-        "You are Izzie, a personal AI assistant. Generate a warm, personalized good morning \
-briefing based on what's ahead today. 3-5 sentences max. Be friendly and helpful.\n\n\
+        "Generate a morning briefing based on today's schedule and open tasks. \
+Bullet points or short sentences. \
+Tone: dispassionate and factual. No pleasantries, no affirmations, no filler. \
+No phrases like \"Good morning\", \"Ready to crush it\", \"Have a great day\". \
+Lead with the most time-sensitive item. Style: briefing officer reading a sitrep, not a wellness app.\n\n\
 Today's calendar (next 24h, all accounts):\n{}\n\nOpen tasks (all accounts):\n{}",
         events_text, tasks_text
     );
@@ -346,6 +349,6 @@ Today's calendar (next 24h, all accounts):\n{}\n\nOpen tasks (all accounts):\n{}
         .map_err(|e| TrustyError::Serialization(e.to_string()))?;
     Ok(json["choices"][0]["message"]["content"]
         .as_str()
-        .unwrap_or("Good morning!")
+        .unwrap_or("Here are today's priorities.")
         .to_string())
 }
