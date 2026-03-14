@@ -2671,7 +2671,11 @@ Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — 
 Required format (output this and nothing else):
 {{"reply":"your response to the user (markdown allowed)","toolCalls":[],"memoriesToSave":[],"referencedEntities":[]}}
 
+Example with a memory (note: `category` MUST be a plain string, NOT a JSON object):
+{{"reply":"Got it!","toolCalls":[],"memoriesToSave":[{{"content":"User prefers concise replies","category":"user_preference","importance":0.8}}],"referencedEntities":[]}}
+
 IMPORTANT: The "reply" field must ALWAYS be non-empty in your final response (when `toolCalls` is empty). Even for declarative statements, acknowledge receipt — e.g. "Got it, noted!" Never leave "reply" empty in a final response.
+IMPORTANT: `category` must be a plain string (e.g. "reminder", "user_preference"), NOT a JSON object like {{"Reminder": null}}.
 
 Be helpful, concise, and honest. Only include items in memoriesToSave if you learned something genuinely new and useful. Be selective — 0-1 memories per turn is typical."#,
         now.with_timezone(&chrono::Local).format("%A, %B %d, %Y"),
@@ -2769,11 +2773,15 @@ fn parse_response(raw: &str) -> StructuredResponse {
 /// Also guards against the reply field itself being a raw StructuredResponse JSON blob.
 fn clean_reply(reply: &str) -> String {
     let trimmed = reply.trim();
-    // Guard: if reply is itself a JSON StructuredResponse blob, extract the inner reply.
+    // Safety net: if the whole reply is a JSON object with a "reply" key, extract it.
+    // This fires when parse_response falls back to raw text because deserialization
+    // failed (e.g. MemoryCategory sent as a map) and the entire JSON blob lands here.
     if trimmed.starts_with('{') {
-        if let Ok(inner) = serde_json::from_str::<StructuredResponse>(trimmed) {
-            if !inner.reply.is_empty() {
-                return clean_reply(&inner.reply);
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(inner_reply) = v.get("reply").and_then(|r| r.as_str()) {
+                if !inner_reply.is_empty() {
+                    return clean_reply(inner_reply);
+                }
             }
         }
     }

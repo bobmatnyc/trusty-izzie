@@ -97,6 +97,11 @@ pub struct ToolCallRequest {
 #[serde(rename_all = "camelCase")]
 pub struct MemoryToSave {
     /// Semantic category for storage and decay.
+    ///
+    /// Accepts both a plain string (`"reminder"`) and the map form the LLM
+    /// sometimes emits (`{"Reminder": null}`).  Unknown values fall back to
+    /// `MemoryCategory::General`.
+    #[serde(deserialize_with = "deserialize_memory_category")]
     pub category: crate::memory::MemoryCategory,
     /// Human-readable content of the memory.
     pub content: String,
@@ -148,6 +153,43 @@ fn deserialize_importance<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32,
         }
     }
     d.deserialize_any(V)
+}
+
+fn deserialize_memory_category<'de, D>(d: D) -> Result<crate::memory::MemoryCategory, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use crate::memory::MemoryCategory;
+
+    fn from_str(s: &str) -> MemoryCategory {
+        match s.to_lowercase().as_str() {
+            "user_preference" | "userpreference" | "preference" => MemoryCategory::UserPreference,
+            "person_fact" | "personfact" => MemoryCategory::PersonFact,
+            "project_fact" | "projectfact" => MemoryCategory::ProjectFact,
+            "company_fact" | "companyfact" => MemoryCategory::CompanyFact,
+            "recurring_event" | "recurringevent" => MemoryCategory::RecurringEvent,
+            "decision" => MemoryCategory::Decision,
+            "event" => MemoryCategory::Event,
+            "reminder" => MemoryCategory::Reminder,
+            "location" => MemoryCategory::Location,
+            "contact" => MemoryCategory::Contact,
+            _ => MemoryCategory::General,
+        }
+    }
+
+    let v = serde_json::Value::deserialize(d)?;
+    match &v {
+        serde_json::Value::String(s) => Ok(from_str(s)),
+        serde_json::Value::Object(map) => {
+            // LLM sometimes emits {"Reminder": null} — treat first key as variant name.
+            Ok(map
+                .keys()
+                .next()
+                .map(|k| from_str(k))
+                .unwrap_or(MemoryCategory::General))
+        }
+        _ => Ok(MemoryCategory::General),
+    }
 }
 
 /// Context bundle assembled for each chat completion call.
