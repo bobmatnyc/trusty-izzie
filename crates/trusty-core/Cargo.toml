@@ -9,6 +9,8 @@ license.workspace = true
 [dependencies]
 trusty-models = { path = "../trusty-models" }
 
+keyring = { workspace = true }
+
 config = { workspace = true }
 dotenvy = { workspace = true }
 anyhow = { workspace = true }

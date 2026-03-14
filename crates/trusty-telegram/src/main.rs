@@ -1518,7 +1518,8 @@ async fn run_webhook(
     api_set_webhook(&http, &bot_token, &webhook_url, Some(&webhook_secret)).await?;
 
     let google_client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
-    let google_client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+    let google_client_secret =
+        trusty_core::secrets::get("GOOGLE_CLIENT_SECRET").unwrap_or_default();
 
     let session_manager = Arc::new(SessionManager::new(sqlite.clone()));
     let state = Arc::new(WebhookState {
@@ -1729,6 +1730,7 @@ async fn run_poll(
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
+    trusty_core::secrets::migrate_from_env();
 
     let cli = Cli::parse();
 
@@ -1772,7 +1774,7 @@ async fn main() -> Result<()> {
                 .get_config("telegram_bot_token")
                 .ok()
                 .flatten()
-                .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())
+                .or_else(|| trusty_core::secrets::get("TELEGRAM_BOT_TOKEN"))
                 .ok_or_else(|| {
                     anyhow!("No bot token found. Run: trusty-telegram pair --token <TOKEN>")
                 })?;
@@ -1801,7 +1803,7 @@ async fn main() -> Result<()> {
                 .with_lance(Arc::clone(&store.lance))
                 .with_memory_recaller(memory_recaller);
 
-            let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+            let api_key = trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default();
 
             // Build user context from environment / config.
             let primary_email = std::env::var("TRUSTY_PRIMARY_EMAIL").unwrap_or_default();
@@ -1897,7 +1899,7 @@ async fn main() -> Result<()> {
                 .get_config("telegram_bot_token")
                 .ok()
                 .flatten()
-                .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())
+                .or_else(|| trusty_core::secrets::get("TELEGRAM_BOT_TOKEN"))
                 .ok_or_else(|| {
                     anyhow!("No bot token found. Run: trusty-telegram pair --token <TOKEN>")
                 })?;

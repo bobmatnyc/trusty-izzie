@@ -40,6 +40,7 @@ fn load_instance_id(data_dir: &std::path::Path) -> String {
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
+    trusty_core::secrets::migrate_from_env();
     let log_level = std::env::var("TRUSTY_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     init_logging(&log_level);
 
@@ -59,11 +60,11 @@ async fn main() -> Result<()> {
     // Active when SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET are both set.
     // Shares this port (3456) so the existing ngrok tunnel works without
     // a second tunnel.
-    let has_slack =
-        std::env::var("SLACK_BOT_TOKEN").is_ok() && std::env::var("SLACK_SIGNING_SECRET").is_ok();
+    let has_slack = trusty_core::secrets::get("SLACK_BOT_TOKEN").is_some()
+        && trusty_core::secrets::get("SLACK_SIGNING_SECRET").is_some();
 
     if has_slack {
-        let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+        let api_key = trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default();
         let instance_id = load_instance_id(&data_dir);
 
         match Store::open_lazy_kuzu(&data_dir, &instance_id).await {

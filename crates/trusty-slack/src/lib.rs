@@ -47,10 +47,10 @@ pub fn slack_state_from_env(
     engine: Arc<trusty_chat::ChatEngine>,
     store: Arc<trusty_store::Store>,
 ) -> Option<Arc<SlackState>> {
-    let bot_token = std::env::var("SLACK_BOT_TOKEN").ok()?;
+    let bot_token = trusty_core::secrets::get("SLACK_BOT_TOKEN")?;
     // signing_secret only required for HTTP webhook mode; empty string disables verification
-    let signing_secret = std::env::var("SLACK_SIGNING_SECRET").unwrap_or_default();
-    let user_token = std::env::var("SLACK_USER_TOKEN").ok();
+    let signing_secret = trusty_core::secrets::get("SLACK_SIGNING_SECRET").unwrap_or_default();
+    let user_token = trusty_core::secrets::get("SLACK_USER_TOKEN");
 
     Some(Arc::new(SlackState {
         engine,
@@ -71,10 +71,7 @@ pub fn slack_state_from_env(
 ///
 /// Returns `true` if Socket Mode was started, `false` if `SLACK_APP_TOKEN` is absent.
 pub fn spawn_socket_mode(state: Arc<SlackState>) -> bool {
-    let app_token = match std::env::var("SLACK_APP_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
+    let app_token = match trusty_core::secrets::get("SLACK_APP_TOKEN").filter(|s| !s.is_empty()) {
         Some(t) => t,
         None => return false,
     };

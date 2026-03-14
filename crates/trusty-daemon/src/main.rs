@@ -82,6 +82,7 @@ enum DaemonCmd {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = load_config(cli.config.as_deref()).await?;
+    trusty_core::secrets::migrate_from_env();
 
     init_logging(&std::env::var("TRUSTY_LOG_LEVEL").unwrap_or_else(|_| "info".to_string()));
 
@@ -250,7 +251,7 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
     }
 
     let agents_dir = std::path::PathBuf::from(&config.agents.agents_dir);
-    let openrouter_api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+    let openrouter_api_key = trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default();
     let dispatcher = EventDispatcher::new_with_agents(
         store,
         agents_dir,

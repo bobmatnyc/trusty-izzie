@@ -291,7 +291,7 @@ impl ChatEngine {
             .ok_or_else(|| anyhow::anyhow!("No refresh token for {}; re-auth required", user_id))?;
 
         let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
-        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+        let client_secret = trusty_core::secrets::get("GOOGLE_CLIENT_SECRET").unwrap_or_default();
         let ngrok =
             std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
         let redirect_uri = format!("https://{}/api/auth/google/callback", ngrok);
@@ -1046,8 +1046,8 @@ impl ChatEngine {
     }
 
     async fn tool_web_search(&self, input: &serde_json::Value) -> Result<String> {
-        let api_key =
-            std::env::var("BRAVE_SEARCH_API_KEY").context("BRAVE_SEARCH_API_KEY not set")?;
+        let api_key = trusty_core::secrets::get("BRAVE_SEARCH_API_KEY")
+            .context("BRAVE_SEARCH_API_KEY not set")?;
         let query = input["query"]
             .as_str()
             .context("Missing required parameter: query")?;
@@ -1215,9 +1215,9 @@ impl ChatEngine {
 
     /// Search via Tavily AI-optimized search API.
     async fn tool_tavily_search(&self, input: &serde_json::Value) -> Result<String> {
-        let api_key = match std::env::var("TAVILY_API_KEY") {
-            Ok(k) => k,
-            Err(_) => return Ok("Tavily not configured (TAVILY_API_KEY missing)".to_string()),
+        let api_key = match trusty_core::secrets::get("TAVILY_API_KEY") {
+            Some(k) => k,
+            None => return Ok("Tavily not configured (TAVILY_API_KEY missing)".to_string()),
         };
         let query = input["query"]
             .as_str()
@@ -1269,9 +1269,9 @@ impl ChatEngine {
 
     /// Scrape a URL to clean markdown via Firecrawl.
     async fn tool_firecrawl_scrape(&self, input: &serde_json::Value) -> Result<String> {
-        let api_key = match std::env::var("FIRECRAWL_API_KEY") {
-            Ok(k) => k,
-            Err(_) => return Ok("Firecrawl not configured (FIRECRAWL_API_KEY missing)".to_string()),
+        let api_key = match trusty_core::secrets::get("FIRECRAWL_API_KEY") {
+            Some(k) => k,
+            None => return Ok("Firecrawl not configured (FIRECRAWL_API_KEY missing)".to_string()),
         };
         let url = input["url"]
             .as_str()
@@ -1311,9 +1311,9 @@ impl ChatEngine {
 
     /// Run a browser automation task via Skyvern.
     async fn tool_skyvern_task(&self, input: &serde_json::Value) -> Result<String> {
-        let api_key = match std::env::var("SKYVERN_API_KEY") {
-            Ok(k) => k,
-            Err(_) => return Ok("Skyvern not configured (SKYVERN_API_KEY missing)".to_string()),
+        let api_key = match trusty_core::secrets::get("SKYVERN_API_KEY") {
+            Some(k) => k,
+            None => return Ok("Skyvern not configured (SKYVERN_API_KEY missing)".to_string()),
         };
         let url = input["url"]
             .as_str()
@@ -1399,9 +1399,9 @@ impl ChatEngine {
 
     /// Search Google via SerpApi and return structured results.
     async fn tool_serpapi_search(&self, input: &serde_json::Value) -> Result<String> {
-        let api_key = match std::env::var("SERPAPI_API_KEY") {
-            Ok(k) => k,
-            Err(_) => return Ok("SerpApi not configured (SERPAPI_API_KEY missing)".to_string()),
+        let api_key = match trusty_core::secrets::get("SERPAPI_API_KEY") {
+            Some(k) => k,
+            None => return Ok("SerpApi not configured (SERPAPI_API_KEY missing)".to_string()),
         };
         let query = input["query"]
             .as_str()
@@ -2379,9 +2379,9 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
         if let Some((env_key, api_key_value)) = detect_skill_activation(user_message) {
             // Set in current process so subsequent tool calls in this process see it.
             std::env::set_var(&env_key, &api_key_value);
-            // Persist to config.env for future restarts.
-            if let Err(e) = persist_skill_key(&env_key, &api_key_value) {
-                tracing::warn!(env_key = %env_key, error = %e, "failed to persist skill key to config.env");
+            // Persist to Keychain for future restarts.
+            if let Err(e) = trusty_core::secrets::set(&env_key, &api_key_value) {
+                tracing::warn!(env_key = %env_key, error = %e, "failed to persist skill key to Keychain");
             }
             // Find display name for confirmation message.
             let display_name = SKILL_CATALOG
@@ -2390,7 +2390,7 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
                 .map(|(_, info)| info.name)
                 .unwrap_or(&env_key);
             let reply = format!(
-                "Done! The **{}** skill is now active. I've saved your key to `config.env` so it persists across restarts. Try asking me something that uses it.",
+                "Done! The **{}** skill is now active. I've saved your key to the macOS Keychain so it persists across restarts. Try asking me something that uses it.",
                 display_name
             );
             session.messages.push(ChatMessage {
@@ -2832,21 +2832,6 @@ fn detect_skill_activation(msg: &str) -> Option<(String, String)> {
         }
     }
     None
-}
-
-/// Append `KEY=value` to the config.env file in `TRUSTY_DATA_DIR`.
-fn persist_skill_key(env_key: &str, value: &str) -> std::io::Result<()> {
-    use std::io::Write as IoWrite;
-    let data_dir = std::env::var("TRUSTY_DATA_DIR")
-        .unwrap_or_else(|_| "~/.local/share/trusty-izzie".to_string());
-    let data_dir = shellexpand::tilde(&data_dir);
-    let config_env_path = format!("{}/config.env", data_dir);
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&config_env_path)?;
-    writeln!(file, "{}={}", env_key, value)?;
-    Ok(())
 }
 
 fn system_prompt(
@@ -3495,7 +3480,7 @@ impl ChatEngine {
     ///
     /// Parameters: query, channel_id?, limit?
     async fn tool_search_slack(&self, input: &serde_json::Value) -> Result<String> {
-        let token = match std::env::var("SLACK_BOT_TOKEN").ok() {
+        let token = match trusty_core::secrets::get("SLACK_BOT_TOKEN") {
             Some(t) => t,
             None => return Ok("SLACK_BOT_TOKEN not configured.".into()),
         };
@@ -3558,7 +3543,7 @@ impl ChatEngine {
             }
         } else {
             // Workspace-wide: use search.messages (requires search:read scope on user token)
-            let user_token = std::env::var("SLACK_USER_TOKEN").unwrap_or(token);
+            let user_token = trusty_core::secrets::get("SLACK_USER_TOKEN").unwrap_or(token);
             let resp: serde_json::Value = self
                 .http
                 .get("https://slack.com/api/search.messages")

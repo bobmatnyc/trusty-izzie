@@ -9,9 +9,7 @@ use trusty_core::error::TrustyError;
 /// Post a plain-text message to the configured Slack incoming webhook.
 /// Markdown in `text` is rendered as Slack mrkdwn automatically.
 pub async fn send_slack_push(text: &str) -> Result<(), TrustyError> {
-    let webhook_url = match std::env::var("SLACK_WEBHOOK_URL")
-        .ok()
-        .filter(|s| !s.is_empty())
+    let webhook_url = match trusty_core::secrets::get("SLACK_WEBHOOK_URL").filter(|s| !s.is_empty())
     {
         Some(u) => u,
         None => {

@@ -168,7 +168,7 @@ fn resolve_contact_name(conn: &Connection, handle: &str) -> Option<String> {
 
 async fn run_check(store: &Arc<Store>) -> Result<(), anyhow::Error> {
     let home = std::env::var("HOME").unwrap_or_default();
-    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+    let api_key = trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default();
 
     // --- Read cursors ---
     let imsg_cursor: i64 = store

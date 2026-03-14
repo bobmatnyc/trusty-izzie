@@ -1,4 +1,12 @@
+use keyring::Entry;
 use std::collections::HashMap;
+
+fn store_secret(key: &str, value: &str) -> Result<(), String> {
+    Entry::new("trusty-izzie", key)
+        .map_err(|e| e.to_string())?
+        .set_password(value)
+        .map_err(|e| e.to_string())
+}
 
 #[derive(serde::Serialize, Default)]
 pub struct AppConfig {
@@ -148,8 +156,10 @@ pub async fn update_skills(
     new_lines.push(format!("TRUSTY_SKILLS_ENABLED={}", enabled.join(",")));
     let mut sorted: Vec<_> = keys.iter().collect();
     sorted.sort_by_key(|(k, _)| k.as_str());
-    for (env, val) in sorted {
-        new_lines.push(format!("{env}={val}"));
+    for (env, val) in &sorted {
+        if let Err(e) = store_secret(env, val) {
+            eprintln!("warn: failed to store {env} in Keychain: {e}");
+        }
     }
 
     tokio::fs::write(&path, new_lines.join("\n") + "\n")

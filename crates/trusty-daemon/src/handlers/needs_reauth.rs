@@ -58,7 +58,7 @@ impl EventHandler for NeedsReauthHandler {
         // Generate a fresh PKCE pair and build the consent URL.
         let (verifier, challenge) = generate_pkce_pair();
         let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
-        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+        let client_secret = trusty_core::secrets::get("GOOGLE_CLIENT_SECRET").unwrap_or_default();
         let ngrok =
             std::env::var("TRUSTY_NGROK_DOMAIN").unwrap_or_else(|_| "izzie.ngrok.dev".to_string());
         let redirect_uri = format!("https://{ngrok}/api/auth/google/callback");

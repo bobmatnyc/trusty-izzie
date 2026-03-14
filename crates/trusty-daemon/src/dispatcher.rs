@@ -34,7 +34,7 @@ impl EventDispatcher {
             store,
             PathBuf::from("docs/agents"),
             "https://openrouter.ai/api/v1".to_string(),
-            std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
+            trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default(),
         )
     }
 

@@ -224,6 +224,7 @@ enum ConfigCommand {
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
+    trusty_core::secrets::migrate_from_env();
     let cli = Cli::parse();
     init_logging(&cli.log_level);
     let config = load_config(cli.config.as_deref()).await?;
@@ -753,7 +754,7 @@ async fn run_auth(config: AppConfig) -> Result<()> {
 
     // Read credentials from environment
     let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+    let client_secret = trusty_core::secrets::get("GOOGLE_CLIENT_SECRET").unwrap_or_default();
 
     if client_id.is_empty() || client_secret.is_empty() {
         bail!(

@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 trusty-models = { path = "../trusty-models" }
+trusty-core = { path = "../trusty-core" }
 trusty-store = { path = "../trusty-store" }
 trusty-memory = { path = "../trusty-memory" }
 trusty-extractor = { path = "../trusty-extractor" }

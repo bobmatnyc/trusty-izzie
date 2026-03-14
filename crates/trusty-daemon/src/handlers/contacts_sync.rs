@@ -188,7 +188,7 @@ impl EventHandler for ContactsSyncHandler {
                 "Running Haiku batch dedup for medium-confidence contacts"
             );
 
-            let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+            let api_key = trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default();
             if api_key.is_empty() {
                 warn!("OPENROUTER_API_KEY not set — skipping Haiku dedup, inserting all as new");
                 for (contact, _) in &haiku_candidates {

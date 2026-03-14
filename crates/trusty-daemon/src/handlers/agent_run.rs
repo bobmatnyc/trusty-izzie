@@ -145,9 +145,9 @@ async fn execute_agent_tool(name: &str, args: &serde_json::Value, _store: &Arc<S
         "web_search" => {
             let query = args["query"].as_str().unwrap_or("");
             let count = args["count"].as_u64().unwrap_or(5).min(10);
-            let api_key = match std::env::var("BRAVE_SEARCH_API_KEY") {
-                Ok(k) => k,
-                Err(_) => return "Error: BRAVE_SEARCH_API_KEY not set".into(),
+            let api_key = match trusty_core::secrets::get("BRAVE_SEARCH_API_KEY") {
+                Some(k) => k,
+                None => return "Error: BRAVE_SEARCH_API_KEY not set".into(),
             };
             let url = format!(
                 "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
@@ -195,9 +195,9 @@ async fn execute_agent_tool(name: &str, args: &serde_json::Value, _store: &Arc<S
             let query = args["query"].as_str().unwrap_or("");
             let depth = args["search_depth"].as_str().unwrap_or("basic");
             let max_results = args["max_results"].as_u64().unwrap_or(5);
-            let api_key = match std::env::var("TAVILY_API_KEY") {
-                Ok(k) => k,
-                Err(_) => return "Error: TAVILY_API_KEY not configured".into(),
+            let api_key = match trusty_core::secrets::get("TAVILY_API_KEY") {
+                Some(k) => k,
+                None => return "Error: TAVILY_API_KEY not configured".into(),
             };
             let client = reqwest::Client::new();
             match client
@@ -324,9 +324,9 @@ async fn execute_agent_tool(name: &str, args: &serde_json::Value, _store: &Arc<S
 }
 
 async fn push_telegram_notification(store: &Arc<Store>, agent_name: &str, output: &str) {
-    let token = match std::env::var("TELEGRAM_BOT_TOKEN") {
-        Ok(t) => t,
-        Err(_) => return,
+    let token = match trusty_core::secrets::get("TELEGRAM_BOT_TOKEN") {
+        Some(t) => t,
+        None => return,
     };
 
     let chat_id_str = match store

@@ -75,6 +75,7 @@ fn load_instance_id() -> String {
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
+    trusty_core::secrets::migrate_from_env();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -83,10 +84,11 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let signing_secret =
-        std::env::var("SLACK_SIGNING_SECRET").expect("SLACK_SIGNING_SECRET must be set");
-    let bot_token = std::env::var("SLACK_BOT_TOKEN").expect("SLACK_BOT_TOKEN must be set");
-    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+    let signing_secret = trusty_core::secrets::get("SLACK_SIGNING_SECRET")
+        .expect("SLACK_SIGNING_SECRET must be set");
+    let bot_token =
+        trusty_core::secrets::get("SLACK_BOT_TOKEN").expect("SLACK_BOT_TOKEN must be set");
+    let api_key = trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default();
 
     info!("Loading config...");
     let config = trusty_core::load_config(args.config.as_deref()).await?;
@@ -122,7 +124,7 @@ async fn main() -> Result<()> {
     // Proxy mode state — pending approval drafts
     let proxy = Arc::new(ProxyState::new());
 
-    let user_token = std::env::var("SLACK_USER_TOKEN").ok();
+    let user_token = trusty_core::secrets::get("SLACK_USER_TOKEN");
 
     let state = Arc::new(SlackState {
         engine,

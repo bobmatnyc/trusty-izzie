@@ -61,12 +61,13 @@ async fn main() -> Result<()> {
         .try_init();
 
     let config = load_config(None).await?;
+    trusty_core::secrets::migrate_from_env();
 
     let data_dir = expand_tilde(&config.storage.data_dir);
     let sqlite_path = data_dir.join(&config.storage.sqlite_path);
     let sqlite = Arc::new(SqliteStore::open(&sqlite_path)?);
 
-    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+    let api_key = trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default();
     let assembler = ContextAssembler::new(
         config.chat.context_memory_limit,
         config.chat.context_entity_limit,

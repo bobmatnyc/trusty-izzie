@@ -6,6 +6,7 @@
 pub mod config;
 pub mod error;
 pub mod logging;
+pub mod secrets;
 
 pub use config::load_config;
 pub use error::{Result, TrustyError};
