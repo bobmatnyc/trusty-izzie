@@ -12,9 +12,10 @@ use uuid::Uuid;
 
 use trusty_core::{init_logging, load_config};
 use trusty_email::auth::{generate_pkce_pair, GoogleAuthClient};
+use trusty_embeddings::embedder::{Embedder, EmbeddingModel};
 use trusty_models::config::AppConfig;
 use trusty_models::entity::EntityType;
-use trusty_models::memory::MemoryCategory;
+use trusty_models::memory::{Memory, MemoryCategory};
 use trusty_store::{SqliteStore, Store};
 
 use crate::log::{append_interaction, InteractionLog};
@@ -171,6 +172,21 @@ enum MemoryCommand {
     List(MemoryListArgs),
     /// Search memories by text.
     Search(MemorySearchArgs),
+    /// Save a new memory directly.
+    Save {
+        /// Memory content (plain text or JSON).
+        #[arg(short, long)]
+        content: String,
+        /// Category: general, reminder, user_preference, relationship, project, skill
+        #[arg(short = 'C', long, default_value = "general")]
+        category: String,
+        /// Importance 0.0–1.0.
+        #[arg(short, long, default_value = "0.8")]
+        importance: f32,
+        /// Comma-separated related entity names.
+        #[arg(short, long)]
+        related: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -649,7 +665,8 @@ fn print_entity_table(entities: &[trusty_models::entity::Entity]) {
 
 async fn run_memory(cmd: MemoryCommand, config: AppConfig) -> Result<()> {
     let t0 = Instant::now();
-    let store = open_store(&config).await?;
+    let dir = data_dir(&config);
+    let store = Arc::new(Store::open_lazy_kuzu(&dir, &load_instance_id()).await?);
     let log_path = data_dir(&config).join("interactions.jsonl");
 
     match cmd {
@@ -705,6 +722,71 @@ async fn run_memory(cmd: MemoryCommand, config: AppConfig) -> Result<()> {
                     memories_saved: None,
                     query: Some(&args.query),
                     result_count: Some(memories.len()),
+                    dry_run: false,
+                },
+            );
+        }
+        MemoryCommand::Save {
+            content,
+            category,
+            importance,
+            related,
+        } => {
+            // Parse category via serde snake_case (falls back to General on unknown).
+            let category_val: MemoryCategory =
+                serde_json::from_value(serde_json::Value::String(category.clone()))
+                    .unwrap_or(MemoryCategory::General);
+
+            let related_entities: Vec<String> = related
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let now = chrono::Utc::now();
+            let memory = Memory {
+                id: uuid::Uuid::new_v4(),
+                user_id: load_instance_id(),
+                category: category_val,
+                content: content.clone(),
+                embedding: None,
+                related_entities,
+                source_id: None,
+                importance,
+                access_count: 0,
+                last_accessed: None,
+                created_at: now,
+                updated_at: now,
+            };
+
+            // Embed the content for vector search.
+            let embedder =
+                tokio::task::spawn_blocking(|| Embedder::new(EmbeddingModel::AllMiniLmL6V2))
+                    .await??;
+            let content_for_embed = content.clone();
+            let embedding =
+                tokio::task::spawn_blocking(move || embedder.embed(&content_for_embed)).await??;
+
+            store.lance.upsert_memory(&memory, embedding).await?;
+            println!("Saved memory: {}", memory.id);
+            println!("  category:  {}", memory_category_label(&memory.category));
+            println!("  importance: {:.2}", importance);
+            println!("  content:   {}", truncate(&content, 80));
+            let _ = append_interaction(
+                &log_path,
+                &InteractionLog {
+                    ts: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                    command: "memory_save",
+                    session_id: None,
+                    message: None,
+                    reply_preview: None,
+                    tokens: None,
+                    duration_ms: t0.elapsed().as_millis() as u64,
+                    memories_saved: Some(1),
+                    query: None,
+                    result_count: None,
                     dry_run: false,
                 },
             );

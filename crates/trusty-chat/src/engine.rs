@@ -3135,8 +3135,30 @@ Your ENTIRE response must be a single raw JSON object. Output ONLY the JSON — 
 Required format (output this and nothing else):
 {{"reply":"your response to the user (markdown allowed)","toolCalls":[],"memoriesToSave":[],"referencedEntities":[]}}
 
-Example with a memory (note: `category` MUST be a plain string, NOT a JSON object):
-{{"reply":"Got it!","toolCalls":[],"memoriesToSave":[{{"content":"User prefers concise replies","category":"user_preference","importance":0.8}}],"referencedEntities":[]}}
+## Memory Schema (CRITICAL — follow exactly)
+
+When saving memories, use structured JSON content for these types:
+
+**Person profile** (use when user shares info about a person):
+{{"type":"person_profile","name":"...","email":"...","relationship":"...","interests":[...],"notes":"..."}}
+
+**Recurring pattern** (use for habits, preferences, routines):
+{{"type":"recurring_pattern","description":"...","frequency":"...","last":"...","next":"..."}}
+
+**Reminder** (use for time-based follow-ups):
+{{"type":"reminder","date":"YYYY-MM-DD","subject":"...","context":"..."}}
+
+**User preference** (use for how user wants Izzie to behave):
+{{"type":"preference","key":"...","value":"...","context":"..."}}
+
+Plain text is acceptable for one-off facts that do not fit the above categories.
+
+IMPORTANT: When the user says "remember X about Y" or "save info on Y", save it as person_profile JSON. Include ALL details provided — do not summarise to basics. A comprehensive profile in one memory is better than many sparse ones.
+
+**Category field must match**: person_profile/recurring_pattern → "general"; reminder → "reminder"; preference → "user_preference"
+
+Example with a structured memory (note: `category` MUST be a plain string, NOT a JSON object):
+{{"reply":"Got it!","toolCalls":[],"memoriesToSave":[{{"content":"{{\"type\":\"person_profile\",\"name\":\"Alice\",\"email\":\"alice@example.com\",\"relationship\":\"colleague\"}}","category":"general","importance":0.8}}],"referencedEntities":[]}}
 
 IMPORTANT: The "reply" field must ALWAYS be non-empty in your final response (when `toolCalls` is empty). Even for declarative statements, acknowledge receipt — e.g. "Got it, noted!" Never leave "reply" empty in a final response.
 IMPORTANT: `category` must be a plain string (e.g. "reminder", "user_preference"), NOT a JSON object like {{"Reminder": null}}.

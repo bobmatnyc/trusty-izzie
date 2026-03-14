@@ -10142,6 +10142,7 @@ dependencies = [
  "config",
  "dotenvy",
  "serde",
+ "shellexpand",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
