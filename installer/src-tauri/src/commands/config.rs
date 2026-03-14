@@ -1,12 +1,31 @@
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as FmtWrite;
 
 fn store_secret(key: &str, value: &str) -> Result<(), String> {
-    Entry::new("trusty-izzie", key)
-        .map_err(|e| e.to_string())?
-        .set_password(value)
-        .map_err(|e| e.to_string())
+    // Delete existing
+    let _ = std::process::Command::new("security")
+        .args(["delete-generic-password", "-s", "trusty-izzie", "-a", key])
+        .output();
+    // Add with allow-any-app ACL (-T "") so rebuilding never triggers a prompt
+    let status = std::process::Command::new("security")
+        .args([
+            "add-generic-password",
+            "-s",
+            "trusty-izzie",
+            "-a",
+            key,
+            "-w",
+            value,
+            "-T",
+            "",
+        ])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Failed to store {}", key))
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

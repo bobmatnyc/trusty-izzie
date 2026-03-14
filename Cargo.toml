@@ -100,9 +100,6 @@ hex = "0.4"
 # OAuth
 oauth2 = "4"
 
-# Secrets (macOS Keychain)
-keyring = { version = "3", features = ["apple-native"] }
-
 # Utilities
 futures = "0.3"
 async-trait = "0.1"
