@@ -110,6 +110,22 @@
       ]
     },
     {
+      "id": "serpapi",
+      "name": "SerpApi",
+      "description": "Google search with structured results — knowledge graph, rich snippets, local results",
+      "tags": ["API key required"],
+      "keys": [
+        {
+          "env": "SERPAPI_API_KEY",
+          "label": "SerpApi API Key",
+          "placeholder": "serpapi-...",
+          "required": true,
+          "url": "https://serpapi.com/manage-api-key",
+          "urlLabel": "Get a key at serpapi.com →"
+        }
+      ]
+    },
+    {
       "id": "slack_search",
       "name": "Slack Search",
       "description": "Search Slack messages and channel history",

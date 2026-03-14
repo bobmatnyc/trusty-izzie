@@ -252,6 +252,7 @@ impl ChatEngine {
             ToolName::TavilySearch => self.tool_tavily_search(input).await,
             ToolName::FirecrawlScrape => self.tool_firecrawl_scrape(input).await,
             ToolName::SkyvernTask => self.tool_skyvern_task(input).await,
+            ToolName::SerpApiSearch => self.tool_serpapi_search(input).await,
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -1394,6 +1395,78 @@ impl ChatEngine {
         Ok(format!(
             "Task running at https://app.skyvern.com/tasks/{task_id} — check back shortly"
         ))
+    }
+
+    /// Search Google via SerpApi and return structured results.
+    async fn tool_serpapi_search(&self, input: &serde_json::Value) -> Result<String> {
+        let api_key = match std::env::var("SERPAPI_API_KEY") {
+            Ok(k) => k,
+            Err(_) => return Ok("SerpApi not configured (SERPAPI_API_KEY missing)".to_string()),
+        };
+        let query = input["query"]
+            .as_str()
+            .context("Missing required parameter: query")?;
+        let engine = input["engine"].as_str().unwrap_or("google");
+
+        let response: serde_json::Value = self
+            .http
+            .get("https://serpapi.com/search")
+            .query(&[
+                ("api_key", api_key.as_str()),
+                ("q", query),
+                ("engine", engine),
+                ("num", "5"),
+            ])
+            .send()
+            .await
+            .context("SerpApi request failed")?
+            .error_for_status()
+            .context("SerpApi API error")?
+            .json()
+            .await
+            .context("Failed to parse SerpApi response")?;
+
+        let mut parts: Vec<String> = vec![];
+
+        // Lead with direct answer box if present.
+        if let Some(answer) = response["answer_box"]["answer"]
+            .as_str()
+            .or_else(|| response["answer_box"]["snippet"].as_str())
+        {
+            if !answer.is_empty() {
+                parts.push(format!("**Answer**: {answer}\n"));
+            }
+        }
+
+        // Knowledge graph description.
+        if let Some(kg) = response["knowledge_graph"]["description"].as_str() {
+            if !kg.is_empty() {
+                parts.push(format!("**Knowledge Graph**: {kg}\n"));
+            }
+        }
+
+        // Organic results.
+        if let Some(results) = response["organic_results"].as_array() {
+            for r in results {
+                let title = r["title"].as_str().unwrap_or("(no title)");
+                let link = r["link"].as_str().unwrap_or("");
+                let snippet = r["snippet"].as_str().unwrap_or("");
+                parts.push(format!("- [{title}]({link}): {snippet}"));
+            }
+        }
+
+        if parts.is_empty() {
+            return Ok(format!("No results found for: {query}"));
+        }
+
+        let output = parts.join("\n");
+        const MAX_CHARS: usize = 3000;
+        if output.len() > MAX_CHARS {
+            let truncated: String = output.chars().take(MAX_CHARS).collect();
+            Ok(format!("{truncated}\n\n[truncated]"))
+        } else {
+            Ok(output)
+        }
     }
 
     async fn fetch_calendar_events_for(&self, email: &str, days: i64) -> Result<Vec<String>> {
@@ -2679,6 +2752,7 @@ I can check my own service status with `check_service_status`, report my version
 - **Tavily Search**: Use `tavily_search` for research questions and current events when you want a direct AI-synthesized answer plus cited sources. Requires `TAVILY_API_KEY`.
 - **Firecrawl Scrape**: Use `firecrawl_scrape` when the user shares a URL and wants its full content extracted, or when `web_search` returns a URL worth reading in full. Returns clean markdown. Requires `FIRECRAWL_API_KEY`.
 - **Skyvern Browser Automation**: Use `skyvern_task` when the user needs to interact with a website — fill a form, submit something, click buttons, or extract data from a page that requires navigation. Unlike Firecrawl (passive scrape), Skyvern *acts* on the page. Tasks take 30–90 seconds; Izzie waits and reports results. Requires `SKYVERN_API_KEY`.
+- **SerpApi Search**: Use `serpapi_search` for Google-quality search with structured results, when you need rich snippets, knowledge graph data, or want Google's ranking specifically. Supports google, bing, youtube, scholar engines. Requires `SERPAPI_API_KEY`.
 - **Unified Search**: Use `search_all` to search across ALL sources simultaneously — memories, iMessage, Slack, calendar, tasks, and web — in a single call.
 - **Email drafting**: I can draft emails and replies on your behalf using `send_email` / `reply_email`. All emails go into an approval queue — I show you the draft and wait for `approve <id>` before sending.
 - **Task creation**: I can create Google Tasks directly via `create_task` (no approval needed).
@@ -2724,6 +2798,7 @@ I can check my own service status with `check_service_status`, report my version
 - `tavily_search`: AI-optimized web search via Tavily. Required: query (string). Returns a direct synthesized answer (if available) followed by top results as `- [title](url): snippet`. Best for research questions and current events. No-op if TAVILY_API_KEY is not set.
 - `firecrawl_scrape`: Extract a web page as clean markdown via Firecrawl. Required: url (string). Caps output at 4000 chars. Use when a user shares a URL to read, or after web_search to read a full article. No-op if FIRECRAWL_API_KEY is not set.
 - `skyvern_task`: Browser automation via Skyvern. Required: url (string), goal (string — what to do on the page). Optional: extract (string — what data to extract). Polls up to 60s; returns extracted_information on completion. No-op if SKYVERN_API_KEY is not set.
+- `serpapi_search`: Google search via SerpApi with structured results. Required: query (string). Optional: engine (google|bing|youtube|scholar, default: google). Returns answer box, knowledge graph, and organic results. No-op if SERPAPI_API_KEY is not set.
 - `create_skill`: Design and build a new skill. Uses Opus to architect the skill spec and Sonnet to write the Python implementation. Required: name (kebab-case, e.g. "hacker-news"), description (plain English — what it fetches, which APIs, etc.). The skill is available on the next turn.
 
 ## Acting on Your Behalf (Search + Act)
@@ -2796,6 +2871,7 @@ NEVER fabricate factual information. For these topics you MUST call the appropri
 - Weather / forecast / temperature / rain / snow → `get_weather` ALWAYS; never guess weather from training data
 - Severe weather / storm warnings / alerts → `get_weather_alerts`
 - Current events, news, real-time information, prices → `web_search` or `tavily_search`
+- User wants Google-quality search with rich snippets, knowledge graph, or specific engine (bing, youtube, scholar) → `serpapi_search`
 - User pastes a URL and asks to read/summarize it → `firecrawl_scrape`
 - User needs to interact with a website (fill a form, submit, click, extract data requiring navigation) → `skyvern_task`
 

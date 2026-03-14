@@ -132,6 +132,8 @@ pub enum ToolName {
     FirecrawlScrape,
     /// Browser automation via Skyvern — navigate websites, fill forms, extract data.
     SkyvernTask,
+    /// Google search with structured results via SerpApi (knowledge graph, rich snippets, local results).
+    SerpApiSearch,
 }
 
 /// A parsed tool call request from the LLM.
