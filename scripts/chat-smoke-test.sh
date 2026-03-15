@@ -310,6 +310,20 @@ run_chat_probes() {
     echo "  -- P6: SQLite contamination check --"
     assert_db_clean "P6 chat_messages table clean" "$db_path"
 
+    # ── Tool awareness probe ──────────────────────────────────────────────────
+    echo ""
+    echo "  -- P7: tool awareness (update_calendar_event must be known) --"
+    chat_send "$base" "can you update or edit calendar events?"
+    local body7; body7=$(cat /tmp/trusty_chat_smoke 2>/dev/null || true)
+    local reply7
+    reply7=$(echo "$body7" | jq -r '.reply // empty' 2>/dev/null || true)
+    if echo "$reply7" | grep -qiE "update_calendar_event|update.*calendar|edit.*calendar|modify.*event"; then
+        pass "P7 tool awareness — Izzie knows about calendar update capability"
+    else
+        fail "P7 tool awareness — Izzie denied calendar update capability" \
+             "Reply (first 200): ${reply7:0:200}"
+    fi
+
     if [[ "$INSTANCE_FAILED" == "true" ]]; then
         echo -e "\n  ${RED}${BOLD}INSTANCE FAILED — do not promote to prod${RESET}"
         return 1
