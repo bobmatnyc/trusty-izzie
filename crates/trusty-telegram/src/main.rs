@@ -127,6 +127,9 @@ enum Command {
         /// Fall back to long-polling mode instead of webhook.
         #[arg(long)]
         poll: bool,
+        /// Start HTTP server only — no Telegram connection (for smoke testing / CI).
+        #[arg(long)]
+        http_only: bool,
     },
     /// Manage Telegram webhook registration.
     Webhook {
@@ -1483,6 +1486,77 @@ fn extract_docx_text(bytes: &[u8]) -> Option<String> {
     }
 }
 
+async fn run_http_only(
+    port: u16,
+    engine: Arc<ChatEngine>,
+    sqlite: Arc<SqliteStore>,
+    store: Arc<Store>,
+    memory_store: Arc<MemoryStore>,
+) -> Result<()> {
+    let http = reqwest::Client::new();
+    let google_client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+    let google_client_secret =
+        trusty_core::secrets::get("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+    let session_manager = Arc::new(SessionManager::new(sqlite.clone()));
+    let extractor = Arc::new(EntityExtractor::new(ExtractorConfig {
+        base_url: String::new(),
+        api_key: String::new(),
+        model: String::new(),
+        max_tokens: 0,
+        confidence_threshold: 0.85,
+        max_relationships: 3,
+    }));
+    let state = Arc::new(WebhookState {
+        engine,
+        allowed_users: vec![],
+        bot_token: String::new(),
+        sqlite,
+        extractor,
+        store,
+        user_context: UserContext {
+            user_id: String::new(),
+            email: String::new(),
+            display_name: String::new(),
+        },
+        min_occurrences: 0,
+        gdrive_token: None,
+        memory_store,
+        session_manager,
+        http,
+        google_client_id,
+        google_client_secret,
+    });
+
+    let governor_conf = Arc::new(
+        tower_governor::governor::GovernorConfigBuilder::default()
+            .per_millisecond(200)
+            .burst_size(20)
+            .finish()
+            .expect("invalid governor config"),
+    );
+
+    let app = Router::new()
+        .route("/health", get(health_handler))
+        .route("/chat", post(chat_handler))
+        .route("/api/auth/google/callback", get(oauth_callback_handler))
+        .with_state(state)
+        .layer(tower_governor::GovernorLayer {
+            config: governor_conf,
+        });
+
+    let addr = format!("0.0.0.0:{port}");
+    info!("HTTP-only server listening on {addr}");
+    println!("trusty-telegram http-only server on port {port}");
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_webhook(
     bot_token: String,
@@ -1766,6 +1840,7 @@ async fn main() -> Result<()> {
         webhook_url: None,
         port: 3457,
         poll: false,
+        http_only: false,
     };
 
     match cli.command.unwrap_or(default_start) {
@@ -1785,6 +1860,7 @@ async fn main() -> Result<()> {
             webhook_url,
             port,
             poll,
+            http_only,
         } => {
             // Prefer the explicitly paired token in SQLite over ambient env vars,
             // so that AI Commander's TELEGRAM_BOT_TOKEN doesn't bleed in.
@@ -1921,7 +1997,10 @@ async fn main() -> Result<()> {
                 println!("trusty-telegram starting (allowed users: {:?})...", allowed);
             }
 
-            if poll {
+            if http_only {
+                // HTTP server only — no Telegram connection.
+                run_http_only(port, engine, Arc::clone(&store.sqlite), store, memory_store).await?;
+            } else if poll {
                 let poll_session_manager = Arc::new(SessionManager::new(Arc::clone(&store.sqlite)));
                 run_poll(
                     token,
