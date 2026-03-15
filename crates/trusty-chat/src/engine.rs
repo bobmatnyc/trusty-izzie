@@ -1637,12 +1637,21 @@ impl ChatEngine {
             let location = item["location"].as_str().unwrap_or("");
             let attendee_count = item["attendees"].as_array().map(|a| a.len()).unwrap_or(0);
 
+            let event_id = item["id"].as_str().unwrap_or("");
             let mut line = format!("• {} — {}", start, summary);
             if !location.is_empty() {
                 line.push_str(&format!(" @ {}", location));
             }
             if attendee_count > 1 {
                 line.push_str(&format!(" ({} attendees)", attendee_count));
+            }
+            if !event_id.is_empty() {
+                // Include IDs so update_calendar_event can be called without extra lookup.
+                // calendar_id = email (Google accepts email as the calendarId for primary).
+                line.push_str(&format!(
+                    " [event_id: {}, calendar_id: {}]",
+                    event_id, email
+                ));
             }
             lines.push(line);
         }
@@ -1675,10 +1684,12 @@ impl ChatEngine {
         for acc in &accounts {
             match self.fetch_calendar_events_for(&acc.email, days).await {
                 Ok(lines) if !lines.is_empty() => {
-                    let label = if acc.identity == "work" {
+                    let label = if acc.identity == "work" || acc.email.contains("duettoresearch") {
                         "Work calendar"
-                    } else {
+                    } else if acc.email == "bob@matsuoka.com" {
                         "Personal calendar"
+                    } else {
+                        &acc.email
                     };
                     all_sections.push(format!(
                         "**{}** ({}):\n{}",
