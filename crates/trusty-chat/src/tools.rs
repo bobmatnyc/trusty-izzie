@@ -93,6 +93,8 @@ pub enum ToolName {
     SearchWhatsapp,
     /// Create a new event on Google Calendar.
     CreateCalendarEvent,
+    /// Update an existing Google Calendar event.
+    UpdateCalendarEvent,
     /// Mark a Google Task as complete.
     CompleteTask,
     /// Fetch upcoming Metro North train departures between two stations.

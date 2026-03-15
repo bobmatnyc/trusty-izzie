@@ -214,6 +214,7 @@ impl ChatEngine {
             ToolName::ExecuteShellCommand => self.tool_execute_shell_command(input).await,
             ToolName::GetCalendarEvents => self.tool_get_calendar_events(input).await,
             ToolName::CreateCalendarEvent => self.tool_create_calendar_event(input).await,
+            ToolName::UpdateCalendarEvent => self.tool_update_calendar_event(input).await,
             ToolName::GetPreferences => self.tool_get_preferences(),
             ToolName::SetPreference => self.tool_set_preference(input),
             ToolName::AddVipContact => self.tool_add_vip_contact(input),
@@ -1813,6 +1814,122 @@ impl ChatEngine {
         ))
     }
 
+    async fn tool_update_calendar_event(&self, input: &serde_json::Value) -> Result<String> {
+        let account_email = input["account_email"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if account_email.is_empty() {
+            return Ok("Failed to update event: account_email is required".to_string());
+        }
+        let calendar_id = input["calendar_id"]
+            .as_str()
+            .unwrap_or("primary")
+            .trim()
+            .to_string();
+        let event_id = input["event_id"].as_str().unwrap_or("").trim().to_string();
+        if event_id.is_empty() {
+            return Ok("Failed to update event: event_id is required".to_string());
+        }
+
+        let access_token = match self.get_valid_token(&account_email).await {
+            Ok(t) => t,
+            Err(e) => {
+                return Ok(format!(
+                    "Failed to update event: no calendar access for {} — {}",
+                    account_email, e
+                ))
+            }
+        };
+
+        // Build the PATCH body with only the fields that were provided.
+        let mut body = serde_json::json!({});
+        let mut changed: Vec<String> = vec![];
+
+        if let Some(summary) = input["summary"].as_str().filter(|s| !s.is_empty()) {
+            body["summary"] = serde_json::Value::String(summary.to_string());
+            changed.push(format!("Title: {}", summary));
+        }
+        if let Some(start) = input["start_time"].as_str().filter(|s| !s.is_empty()) {
+            body["start"] = serde_json::json!({"dateTime": start, "timeZone": "America/New_York"});
+            changed.push(format!("Start: {}", start));
+        }
+        if let Some(end) = input["end_time"].as_str().filter(|s| !s.is_empty()) {
+            body["end"] = serde_json::json!({"dateTime": end, "timeZone": "America/New_York"});
+            changed.push(format!("End: {}", end));
+        }
+        if let Some(desc) = input["description"].as_str().filter(|s| !s.is_empty()) {
+            body["description"] = serde_json::Value::String(desc.to_string());
+            changed.push(format!("Description: {}", desc));
+        }
+        if let Some(loc) = input["location"].as_str().filter(|s| !s.is_empty()) {
+            body["location"] = serde_json::Value::String(loc.to_string());
+            changed.push(format!("Location: {}", loc));
+        }
+
+        if body.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+            return Ok(
+                "Nothing to update: provide at least one of summary, start_time, end_time, description, or location".to_string(),
+            );
+        }
+
+        let url = format!(
+            "https://www.googleapis.com/calendar/v3/calendars/{}/events/{}",
+            calendar_id, event_id
+        );
+        let resp: serde_json::Value = match self
+            .http
+            .patch(&url)
+            .bearer_auth(&access_token)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => match r.json::<serde_json::Value>().await {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(format!(
+                        "Failed to update event: could not parse API response — {}",
+                        e
+                    ))
+                }
+            },
+            Err(e) => {
+                return Ok(format!(
+                    "Failed to update event: API request failed — {}",
+                    e
+                ))
+            }
+        };
+
+        if let Some(err) = resp.get("error") {
+            let msg = err["message"].as_str().unwrap_or("unknown error");
+            return Ok(format!(
+                "Failed to update event: Google API error — {}",
+                msg
+            ));
+        }
+
+        match resp["id"].as_str() {
+            Some(id) if !id.is_empty() => {
+                let mut out = vec![format!("CONFIRMED update_calendar_event id={}", id)];
+                out.extend(changed);
+                Ok(out.join("\n"))
+            }
+            _ => Ok(format!(
+                "Action UNCONFIRMED: calendar API returned no event ID for update of '{}'. \
+                 The event may NOT have been updated. Raw response: {}",
+                event_id,
+                serde_json::to_string(&resp)
+                    .unwrap_or_default()
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            )),
+        }
+    }
+
     async fn tool_get_task_lists(&self, input: &serde_json::Value) -> Result<String> {
         let account_email = input["account_email"].as_str().filter(|e| !e.is_empty());
         let primary_email =
@@ -3077,7 +3194,7 @@ I can check my own service status with `check_service_status`, report my version
 - **Skills discovery**: Use `search_skills` when unsure whether a capability exists — e.g. search "train" to find commute tools, "calendar" for scheduling tools.
 - **Skill creation**: Use `create_skill` to build a brand-new skill from scratch. Opus designs the spec; Sonnet writes the Python implementation. The skill is live on your next message.
 - **macOS Contacts**: I sync with your AddressBook via `sync_contacts`. I know your contact list.
-- **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event`.
+- **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event` and update existing events via `update_calendar_event`.
 - **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
 - **Weather**: I fetch real-time forecasts via `get_weather` (Open-Meteo, no API key) and active NWS severe weather alerts via `get_weather_alerts`. Default location is Hastings-on-Hudson, NY.
 - **Web Search**: I can search the web in real time via `web_search` (Brave Search API). Use this for current events, news, prices, and any information that may have changed since my training cutoff.
@@ -3102,6 +3219,7 @@ I can check my own service status with `check_service_status`, report my version
 - `list_agents` — list available agent definitions
 - `get_calendar_events` — fetch upcoming Google Calendar events (optional: days=1-30, account_email=<email> to query a specific account's calendar)
 - `create_calendar_event` — create a new Google Calendar event. Required: account_email, title, start_datetime (RFC3339), end_datetime (RFC3339). Optional: description, attendees (array of email strings).
+- `update_calendar_event` — update an existing Google Calendar event. Use `get_calendar_events` first to find the event_id. Required: calendar_id, event_id, account_email. Optional: summary, start_time (RFC3339), end_time (RFC3339), description, location.
 - `get_tasks_bulk` — fetches ALL task lists and ALL tasks for one account in a single call. Use this instead of get_task_lists + get_tasks. Required param: account_email.
 - `get_task_lists` — list the user's Google Task lists (optional: account_email to query a specific account)
 - `get_tasks` — fetch tasks from a list (optional: account_email, list_id, max_results, show_completed; default: incomplete tasks from primary list)
@@ -3277,6 +3395,21 @@ After calling any state-mutating tool (create_event, create_task, send_email, re
 - If the tool result contains "UNCONFIRMED" or "Failed" or "error" — tell the user exactly: "I attempted [action] but could not confirm it completed. [reason]. Please verify manually."
 - NEVER say "I've created", "I've sent", "I've scheduled", "Done!" unless the tool confirmed it with an ID or approval queue entry
 - The action is not done until the tool returns a confirmation ID or approval queue entry
+
+## ABSOLUTE RULE — NEVER CLAIM SUCCESS WITHOUT A TOOL RESULT
+
+You MUST NOT write phrases like "I've successfully updated", "Done!", "I've sent", "I've created", "I've deleted", or any claim of completed action UNLESS you have just received a tool result in this same response that confirms it with a resource ID.
+
+If you don't have the right tool for what the user asked:
+- Say so IMMEDIATELY in your first sentence
+- Do NOT describe what you "would have done"
+- Do NOT describe a fake success and then walk it back
+- Offer concrete alternatives (use a different tool, ask the user to do it manually, etc.)
+
+If a tool returns an error or UNCONFIRMED:
+- Tell the user the action did NOT complete
+- State what went wrong
+- Offer to retry or suggest manual steps
 
 ## CRITICAL OUTPUT FORMAT
 
