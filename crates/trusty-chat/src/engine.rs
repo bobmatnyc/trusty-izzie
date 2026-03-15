@@ -1630,10 +1630,19 @@ impl ChatEngine {
         let mut lines = Vec::new();
         for item in items {
             let summary = item["summary"].as_str().unwrap_or("(no title)");
-            let start = item["start"]["dateTime"]
-                .as_str()
-                .or_else(|| item["start"]["date"].as_str())
-                .unwrap_or("unknown time");
+            let start = if let Some(dt) = item["start"]["dateTime"].as_str() {
+                chrono::DateTime::parse_from_rfc3339(dt)
+                    .map(|d| {
+                        d.with_timezone(&chrono::Local)
+                            .format("%-I:%M %p")
+                            .to_string()
+                    })
+                    .unwrap_or_else(|_| dt.to_string())
+            } else if item["start"]["date"].as_str().is_some() {
+                "All day".to_string()
+            } else {
+                "unknown time".to_string()
+            };
             let location = item["location"].as_str().unwrap_or("");
             let attendee_count = item["attendees"].as_array().map(|a| a.len()).unwrap_or(0);
 
