@@ -2645,7 +2645,7 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
                 .map(|(_, info)| info.name)
                 .unwrap_or(&env_key);
             let reply = format!(
-                "Done! The **{}** skill is now active. I've saved your key to the macOS Keychain so it persists across restarts. Try asking me something that uses it.",
+                "Done! The **{}** skill is now active. I've saved your key so it persists across restarts. Try asking me something that uses it.",
                 display_name
             );
             session.messages.push(ChatMessage {
@@ -3072,6 +3072,7 @@ fn detect_skill_activation(msg: &str) -> Option<(String, String)> {
                     "activate", "setup", "install", "key", "with", "my", "is", alias,
                 ]
                 .contains(&lower_w.as_str())
+                && !lower_w.starts_with(alias)   // skip tool names like "firecrawl_scrape"
                 && i > 0
             {
                 return Some((env_key.to_string(), w.to_string()));
