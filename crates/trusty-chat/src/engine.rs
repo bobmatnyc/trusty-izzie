@@ -1593,12 +1593,25 @@ impl ChatEngine {
         }
     }
 
-    async fn fetch_calendar_events_for(&self, email: &str, days: i64) -> Result<Vec<String>> {
+    /// Returns `(sort_key, formatted_line)` tuples for all non-cancelled events.
+    /// `sort_key` is the raw `dateTime` or `date` string from the API, which sorts lexicographically.
+    async fn fetch_calendar_events_for(
+        &self,
+        email: &str,
+        days: i64,
+    ) -> Result<Vec<(String, String)>> {
         let access_token = self.get_valid_token(email).await?;
 
-        let now = chrono::Utc::now();
-        let time_min = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let time_max = (now + chrono::Duration::days(days))
+        // Fix 1: time_min = local midnight today, converted to UTC.
+        let local_today = chrono::Local::now().date_naive();
+        let local_midnight = local_today.and_hms_opt(0, 0, 0).unwrap();
+        let midnight_utc = match local_midnight.and_local_timezone(chrono::Local) {
+            chrono::LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc),
+            chrono::LocalResult::Ambiguous(dt, _) => dt.with_timezone(&chrono::Utc),
+            chrono::LocalResult::None => chrono::Utc::now(),
+        };
+        let time_min = midnight_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let time_max = (midnight_utc + chrono::Duration::days(days))
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
 
@@ -1627,27 +1640,73 @@ impl ChatEngine {
             _ => return Ok(vec![]),
         };
 
-        let mut lines = Vec::new();
+        let mut entries: Vec<(String, String)> = Vec::new();
         for item in items {
+            // Fix 4: skip cancelled events.
+            if item["status"].as_str() == Some("cancelled") {
+                continue;
+            }
+
             let summary = item["summary"].as_str().unwrap_or("(no title)");
-            let start = if let Some(dt) = item["start"]["dateTime"].as_str() {
-                chrono::DateTime::parse_from_rfc3339(dt)
-                    .map(|d| {
-                        d.with_timezone(&chrono::Local)
-                            .format("%-I:%M %p")
-                            .to_string()
-                    })
-                    .unwrap_or_else(|_| dt.to_string())
-            } else if item["start"]["date"].as_str().is_some() {
-                "All day".to_string()
+
+            // Fix 2 & 3: build start/end display with date prefix.
+            let sort_key: String;
+            let time_range: String;
+
+            if let Some(start_dt_str) = item["start"]["dateTime"].as_str() {
+                sort_key = start_dt_str.to_string();
+                let start_local = chrono::DateTime::parse_from_rfc3339(start_dt_str)
+                    .map(|d| d.with_timezone(&chrono::Local))
+                    .ok();
+                let end_local = item["end"]["dateTime"]
+                    .as_str()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|d| d.with_timezone(&chrono::Local));
+
+                let start_str = start_local
+                    .as_ref()
+                    .map(|d| d.format("%a %b %-d, %-I:%M %p").to_string())
+                    .unwrap_or_else(|| start_dt_str.to_string());
+                let end_str = end_local
+                    .as_ref()
+                    .map(|d| d.format("%-I:%M %p").to_string())
+                    .unwrap_or_default();
+
+                time_range = if end_str.is_empty() {
+                    start_str
+                } else {
+                    format!("{}–{}", start_str, end_str)
+                };
+            } else if let Some(start_date_str) = item["start"]["date"].as_str() {
+                sort_key = start_date_str.to_string();
+                let start_nd = chrono::NaiveDate::parse_from_str(start_date_str, "%Y-%m-%d").ok();
+                // Google all-day end.date is exclusive — subtract 1 day.
+                let end_nd = item["end"]["date"]
+                    .as_str()
+                    .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+                    .and_then(|d| d.pred_opt());
+
+                let start_fmt = start_nd
+                    .map(|d| d.format("%a %b %-d").to_string())
+                    .unwrap_or_else(|| start_date_str.to_string());
+
+                time_range = match (start_nd, end_nd) {
+                    (Some(s), Some(e)) if e > s => {
+                        let end_fmt = e.format("%a %b %-d").to_string();
+                        format!("{}–{}, All day", start_fmt, end_fmt)
+                    }
+                    _ => format!("{}, All day", start_fmt),
+                };
             } else {
-                "unknown time".to_string()
-            };
+                sort_key = String::new();
+                time_range = "unknown time".to_string();
+            }
+
             let location = item["location"].as_str().unwrap_or("");
             let attendee_count = item["attendees"].as_array().map(|a| a.len()).unwrap_or(0);
-
             let event_id = item["id"].as_str().unwrap_or("");
-            let mut line = format!("• {} — {}", start, summary);
+
+            let mut line = format!("• {} — {}", time_range, summary);
             if !location.is_empty() {
                 line.push_str(&format!(" @ {}", location));
             }
@@ -1662,9 +1721,9 @@ impl ChatEngine {
                     event_id, email
                 ));
             }
-            lines.push(line);
+            entries.push((sort_key, line));
         }
-        Ok(lines)
+        Ok(entries)
     }
 
     async fn tool_get_calendar_events(&self, input: &serde_json::Value) -> Result<String> {
@@ -1678,45 +1737,44 @@ impl ChatEngine {
                     email
                 ));
             }
-            let lines = self.fetch_calendar_events_for(email, days).await?;
-            if lines.is_empty() {
+            let entries = self.fetch_calendar_events_for(email, days).await?;
+            if entries.is_empty() {
                 return Ok(format!("No events in the next {} days.", days));
             }
             let mut out = vec![format!("Upcoming events (next {} days):", days)];
-            out.extend(lines);
+            out.extend(entries.into_iter().map(|(_, line)| line));
             return Ok(out.join("\n"));
         }
 
-        // No account specified — query all accounts with valid tokens.
+        // Fix 5: collect all events across accounts, sort chronologically, then render.
         let accounts = self.sqlite_ref()?.list_accounts()?;
-        let mut all_sections = Vec::new();
+        // Each tuple: (sort_key, formatted_line_with_account_tag)
+        let mut all_entries: Vec<(String, String)> = Vec::new();
         for acc in &accounts {
-            match self.fetch_calendar_events_for(&acc.email, days).await {
-                Ok(lines) if !lines.is_empty() => {
-                    let label = if acc.identity == "work" || acc.email.contains("duettoresearch") {
-                        "Work calendar"
-                    } else if acc.email == "bob@matsuoka.com" {
-                        "Personal calendar"
-                    } else {
-                        &acc.email
-                    };
-                    all_sections.push(format!(
-                        "**{}** ({}):\n{}",
-                        label,
-                        acc.email,
-                        lines.join("\n")
-                    ));
+            let label = if acc.identity == "work" || acc.email.contains("duettoresearch") {
+                "work".to_string()
+            } else if acc.email == "bob@matsuoka.com" {
+                "personal".to_string()
+            } else {
+                acc.email.clone()
+            };
+            if let Ok(entries) = self.fetch_calendar_events_for(&acc.email, days).await {
+                for (sort_key, line) in entries {
+                    let tagged = format!("{} [{}]", line, label);
+                    all_entries.push((sort_key, tagged));
                 }
-                _ => {}
             }
         }
-        if all_sections.is_empty() {
+        if all_entries.is_empty() {
             return Ok(format!(
                 "No events in the next {} days across all accounts.",
                 days
             ));
         }
-        Ok(all_sections.join("\n\n"))
+        all_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut out = vec![format!("Upcoming events (next {} days):", days)];
+        out.extend(all_entries.into_iter().map(|(_, line)| line));
+        Ok(out.join("\n"))
     }
 
     async fn tool_create_calendar_event(&self, input: &serde_json::Value) -> Result<String> {
