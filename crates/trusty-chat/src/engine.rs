@@ -604,7 +604,7 @@ impl ChatEngine {
         ];
         let active_names: Vec<&str> = skill_map
             .iter()
-            .filter(|(key, _)| std::env::var(key).is_ok())
+            .filter(|(key, _)| trusty_core::secrets::get(key).is_some())
             .map(|(_, name)| *name)
             .collect();
         if active_names.is_empty() {
@@ -3149,6 +3149,117 @@ fn system_prompt_inner(
     } else {
         skills_content.to_string()
     };
+
+    // Skill key presence — used to conditionally show tools in the system prompt
+    let has_brave = trusty_core::secrets::get("BRAVE_SEARCH_API_KEY").is_some();
+    let has_tavily = trusty_core::secrets::get("TAVILY_API_KEY").is_some();
+    let has_firecrawl = trusty_core::secrets::get("FIRECRAWL_API_KEY").is_some();
+    let has_skyvern = trusty_core::secrets::get("SKYVERN_API_KEY").is_some();
+    let has_serpapi = trusty_core::secrets::get("SERPAPI_API_KEY").is_some();
+
+    // ── "What I Can Do" capability bullets ──────────────────────────────────
+    let cap_web_search = if has_brave {
+        "- **Web Search**: I can search the web in real time via `web_search` (Brave \
+Search). Use this for current events, news, prices, or anything that may have changed \
+since my training.\n"
+    } else {
+        ""
+    };
+    let cap_tavily = if has_tavily {
+        "- **Tavily Search**: Use `tavily_search` for research questions where you want \
+a direct AI-synthesized answer with cited sources.\n"
+    } else {
+        ""
+    };
+    let cap_firecrawl = if has_firecrawl {
+        "- **Web Scrape**: Use `firecrawl_scrape` when the user shares a URL and wants \
+its full content extracted. Returns clean markdown.\n"
+    } else {
+        ""
+    };
+    let cap_skyvern = if has_skyvern {
+        "- **Browser Automation**: Use `skyvern_task` when the user needs to interact \
+with a website — fill forms, submit, click, or extract data from a navigated page. \
+Tasks take 30–90 seconds.\n"
+    } else {
+        ""
+    };
+    let cap_serpapi = if has_serpapi {
+        "- **Google Search**: Use `serpapi_search` for Google-quality structured search \
+with knowledge graph, answer boxes, and organic results.\n"
+    } else {
+        ""
+    };
+
+    // ── "Available Tools" reference cards ───────────────────────────────────
+    let tool_web_search = if has_brave {
+        "- `web_search`: Search the web (Brave). Required: query. Optional: count (default 5, max 10).\n"
+    } else {
+        ""
+    };
+    let tool_tavily = if has_tavily {
+        "- `tavily_search`: AI-optimised web search with synthesised answer + sources. Required: query.\n"
+    } else {
+        ""
+    };
+    let tool_firecrawl = if has_firecrawl {
+        "- `firecrawl_scrape`: Extract a URL as clean markdown. Required: url. Max 4000 chars.\n"
+    } else {
+        ""
+    };
+    let tool_skyvern = if has_skyvern {
+        "- `skyvern_task`: Browser automation. Required: url, goal. Optional: extract. Polls up to 60s.\n"
+    } else {
+        ""
+    };
+    let tool_serpapi = if has_serpapi {
+        "- `serpapi_search`: Google search via SerpApi. Required: query. Optional: engine (google|bing|youtube|scholar, default google).\n"
+    } else {
+        ""
+    };
+
+    // ── Anti-hallucination routing hints ────────────────────────────────────
+    let route_web: String = {
+        let tools: Vec<&str> = [
+            if has_brave {
+                Some("`web_search`")
+            } else {
+                None
+            },
+            if has_tavily {
+                Some("`tavily_search`")
+            } else {
+                None
+            },
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if tools.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "- Current events, news, real-time info, prices → {}\n",
+                tools.join(" or ")
+            )
+        }
+    };
+    let route_serpapi = if has_serpapi {
+        "- Google-quality search with rich snippets or specific engine (bing/youtube/scholar) → `serpapi_search`\n"
+    } else {
+        ""
+    };
+    let route_firecrawl = if has_firecrawl {
+        "- User pastes a URL and wants to read or summarise it → `firecrawl_scrape`\n"
+    } else {
+        ""
+    };
+    let route_skyvern = if has_skyvern {
+        "- User needs to interact with a website (forms, clicks, navigation) → `skyvern_task`\n"
+    } else {
+        ""
+    };
+
     let style_section = if communication_style.is_empty() {
         String::new()
     } else {
@@ -3197,11 +3308,7 @@ I can check my own service status with `check_service_status`, report my version
 - **Google Calendar**: I have access to your calendar via `get_calendar_events`. When asked about schedule, meetings, or upcoming events, I call this tool automatically. I can look ahead 1–30 days (default 7). Pass `account_email` to query a specific account (e.g. work calendar vs personal). I can also create new events via `create_calendar_event` and update existing events via `update_calendar_event`.
 - **Google Tasks**: I fetch all task lists and tasks for an account in one call via `get_tasks_bulk`. Pass `account_email` to query a specific account. I also have `get_task_lists` and `get_tasks` for targeted operations. I can mark tasks complete via `complete_task`.
 - **Weather**: I fetch real-time forecasts via `get_weather` (Open-Meteo, no API key) and active NWS severe weather alerts via `get_weather_alerts`. Default location is Hastings-on-Hudson, NY.
-- **Web Search**: I can search the web in real time via `web_search` (Brave Search API). Use this for current events, news, prices, and any information that may have changed since my training cutoff.
-- **Tavily Search**: Use `tavily_search` for research questions and current events when you want a direct AI-synthesized answer plus cited sources. Requires `TAVILY_API_KEY`.
-- **Firecrawl Scrape**: Use `firecrawl_scrape` when the user shares a URL and wants its full content extracted, or when `web_search` returns a URL worth reading in full. Returns clean markdown. Requires `FIRECRAWL_API_KEY`.
-- **Skyvern Browser Automation**: Use `skyvern_task` when the user needs to interact with a website — fill a form, submit something, click buttons, or extract data from a page that requires navigation. Unlike Firecrawl (passive scrape), Skyvern *acts* on the page. Tasks take 30–90 seconds; Izzie waits and reports results. Requires `SKYVERN_API_KEY`.
-- **SerpApi Search**: Use `serpapi_search` for Google-quality search with structured results, when you need rich snippets, knowledge graph data, or want Google's ranking specifically. Supports google, bing, youtube, scholar engines. Requires `SERPAPI_API_KEY`.
+{cap_web_search}{cap_tavily}{cap_firecrawl}{cap_skyvern}{cap_serpapi}
 - **Unified Search**: Use `search_all` to search across ALL sources simultaneously — memories, iMessage, Slack, calendar, tasks, and web — in a single call.
 - **Email drafting**: I can draft emails and replies on your behalf using `send_email` / `reply_email`. All emails go into an approval queue — I show you the draft and wait for `approve <id>` before sending.
 - **Task creation**: I can create Google Tasks directly via `create_task` (no approval needed).
@@ -3244,12 +3351,8 @@ I can check my own service status with `check_service_status`, report my version
 - `get_weather`: Get weather forecast for a location. Optional: location (default: Hastings-on-Hudson), days (1-7, default 3). Returns daily summary + next 6 hours detail.
 - `get_weather_alerts`: Get active NWS severe weather alerts for a location (US only). Optional: location (default: Hastings-on-Hudson).
 - `search_skills`: Discover available skills by keyword. Required: query (string). Returns matching skill names, descriptions, and tool names. Use when unsure if a capability exists.
-- `web_search`: Search the web using Brave Search. Required: query (string). Optional: count (default 5, max 10). Returns titles, descriptions, and URLs of top results.
-- `fetch_page`: Fetch and read the text content of a URL. Required: url (string). Optional: max_chars (default 3000, max 8000). Use after web_search to get full article/review content.
-- `tavily_search`: AI-optimized web search via Tavily. Required: query (string). Returns a direct synthesized answer (if available) followed by top results as `- [title](url): snippet`. Best for research questions and current events. No-op if TAVILY_API_KEY is not set.
-- `firecrawl_scrape`: Extract a web page as clean markdown via Firecrawl. Required: url (string). Caps output at 4000 chars. Use when a user shares a URL to read, or after web_search to read a full article. No-op if FIRECRAWL_API_KEY is not set.
-- `skyvern_task`: Browser automation via Skyvern. Required: url (string), goal (string — what to do on the page). Optional: extract (string — what data to extract). Polls up to 60s; returns extracted_information on completion. No-op if SKYVERN_API_KEY is not set.
-- `serpapi_search`: Google search via SerpApi with structured results. Required: query (string). Optional: engine (google|bing|youtube|scholar, default: google). Returns answer box, knowledge graph, and organic results. No-op if SERPAPI_API_KEY is not set.
+{tool_web_search}- `fetch_page`: Fetch and read the text content of a URL. Required: url (string). Optional: max_chars (default 3000, max 8000). Use after web_search to get full article/review content.
+{tool_tavily}{tool_firecrawl}{tool_skyvern}{tool_serpapi}
 - `get_izzie_status`: Check Izzie's operational status — connected Gmail accounts, active skills, integration health, knowledge base size. Call when user asks "are you connected?", "what accounts do you have?", "what can you do?", "what skills are active?", or similar.
 - `create_skill`: Design and build a new skill. Uses Opus to architect the skill spec and Sonnet to write the Python implementation. Required: name (kebab-case, e.g. "hacker-news"), description (plain English — what it fetches, which APIs, etc.). The skill is available on the next turn.
 
@@ -3323,10 +3426,7 @@ NEVER fabricate factual information. For these topics you MUST call the appropri
 - Train delays / service alerts → `get_train_alerts` ALWAYS
 - Weather / forecast / temperature / rain / snow → `get_weather` ALWAYS; never guess weather from training data
 - Severe weather / storm warnings / alerts → `get_weather_alerts`
-- Current events, news, real-time information, prices → `web_search` or `tavily_search`
-- User wants Google-quality search with rich snippets, knowledge graph, or specific engine (bing, youtube, scholar) → `serpapi_search`
-- User pastes a URL and asks to read/summarize it → `firecrawl_scrape`
-- User needs to interact with a website (fill a form, submit, click, extract data requiring navigation) → `skyvern_task`
+{route_web}{route_serpapi}{route_firecrawl}{route_skyvern}
 
 If a tool returns no data (e.g. no calendar events), say so honestly. Never invent meetings, contacts, emails, or any factual data.
 
@@ -3458,6 +3558,20 @@ Be helpful, concise, and honest. Only include items in memoriesToSave if you lea
         } else {
             user_location.to_string()
         },
+        cap_web_search = cap_web_search,
+        cap_tavily = cap_tavily,
+        cap_firecrawl = cap_firecrawl,
+        cap_skyvern = cap_skyvern,
+        cap_serpapi = cap_serpapi,
+        tool_web_search = tool_web_search,
+        tool_tavily = tool_tavily,
+        tool_firecrawl = tool_firecrawl,
+        tool_skyvern = tool_skyvern,
+        tool_serpapi = tool_serpapi,
+        route_web = route_web,
+        route_serpapi = route_serpapi,
+        route_firecrawl = route_firecrawl,
+        route_skyvern = route_skyvern,
     )
 }
 
