@@ -2759,38 +2759,14 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
                 ),
             });
 
-            // Persist the same two turns to session.messages so they survive a reload.
-            // Use a human-readable summary instead of raw JSON to prevent LLM context corruption.
-            session.messages.push(ChatMessage {
-                id: Uuid::new_v4(),
-                session_id: session.id,
-                role: MessageRole::Assistant,
-                content: format!(
-                    "[Tool calls: {}]",
-                    tool_calls
-                        .iter()
-                        .map(|tc| tc.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                tool_name: None,
-                tool_result: None,
-                token_count: None,
-                created_at: chrono::Utc::now(),
-            });
-            session.messages.push(ChatMessage {
-                id: Uuid::new_v4(),
-                session_id: session.id,
-                role: MessageRole::Tool,
-                content: format!(
-                    "Tool results:\n\n{}\n\n\u{26a0}\u{fe0f} RESPOND WITH JSON ONLY \u{2014} no preamble, no explanation. Your response must be exactly:\n{{\"reply\":\"<your answer here>\",\"toolCalls\":[],\"memoriesToSave\":[],\"referencedEntities\":[]}}",
-                    results_text
-                ),
-                tool_name: None,
-                tool_result: None,
-                token_count: None,
-                created_at: chrono::Utc::now(),
-            });
+            // NOTE: Intermediate tool call/result pairs are intentionally NOT persisted to
+            // session.messages. Storing them caused two bugs:
+            //   1. The "⚠️ RESPOND WITH JSON ONLY" injection leaked into persistent history,
+            //      causing the LLM to emit raw JSON on the very next conversation turn.
+            //   2. "[Tool calls: ...]" assistant messages in history confused the LLM into
+            //      repeating tool calls or echoing internal markers as user-visible replies.
+            // The tool call/result pairs live only in llm_messages (current-turn in-memory
+            // context). Only the user message (step 1) and final reply (step 5) are persisted.
         }
 
         if structured.reply.is_empty() {
