@@ -118,6 +118,8 @@ pub enum ToolName {
     SendEmail,
     /// Reply to an existing Gmail thread on behalf of the user.
     ReplyEmail,
+    /// Search emails across connected Gmail accounts.
+    SearchEmails,
     /// Create a new task in a Google Task list.
     CreateTask,
     /// Search Slack channel/DM history by keyword.

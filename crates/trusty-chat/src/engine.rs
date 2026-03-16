@@ -254,6 +254,7 @@ impl ChatEngine {
             ToolName::CreateSkill => self.tool_create_skill(input).await,
             ToolName::SendEmail => self.tool_send_email(input).await,
             ToolName::ReplyEmail => self.tool_reply_email(input).await,
+            ToolName::SearchEmails => self.tool_search_emails(input).await,
             ToolName::CreateTask => self.tool_create_task(input).await,
             ToolName::SearchSlack => self.tool_search_slack(input).await,
             ToolName::SearchAll => self.tool_search_all(input).await,
@@ -3498,8 +3499,9 @@ I can check my own service status with `check_service_status`, report my version
 I can search across all your data and act on your behalf — with your approval for sensitive actions.
 
 ### Search
-- `search_all`: Unified search across ALL sources at once — memories, iMessage, Slack, calendar, tasks, and web. Required: query. Optional: sources (array of "memories","entities","imessage","slack","calendar","tasks","web" — defaults to all). Returns labeled results from each source.
+- `search_all`: Unified search across ALL sources at once — memories, iMessage, Slack, email, calendar, tasks, and web. Required: query. Optional: sources (array of "memories","entities","imessage","slack","email","calendar","tasks","web" — defaults to all). Returns labeled results from each source.
 - `search_slack`: Search Slack messages. Required: query. Optional: channel_id (specific channel via bot token), limit (default 10). With user token, also does workspace-wide search.
+- `search_emails`: Search your email across all connected Gmail accounts. Required: query (Gmail search syntax — e.g. "hotel confirmation", "from:john@example.com", "subject:booking after:2026/03/01"). Optional: account_email (search one account), max_results (default 10).
 
 ### Email Actions (require approval)
 - `send_email`: Draft a new email for your approval. Required: account_email, to (array of addresses), subject, body. Optional: cc. Returns an approval prompt — confirm with `approve <id>`.
@@ -3991,6 +3993,151 @@ impl ChatEngine {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Email search
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl ChatEngine {
+    /// Search emails across connected Gmail accounts.
+    ///
+    /// Parameters: query (required), account_email (optional), max_results (optional, default 10, max 20)
+    async fn tool_search_emails(&self, input: &serde_json::Value) -> Result<String> {
+        let query = match input["query"].as_str().filter(|s| !s.is_empty()) {
+            Some(q) => q,
+            None => return Ok("Missing required parameter: query".into()),
+        };
+
+        let max_results = input["max_results"].as_i64().unwrap_or(10).clamp(1, 20);
+        let specific_account = input["account_email"].as_str().filter(|s| !s.is_empty());
+
+        let sqlite = self.sqlite_ref()?;
+        let accounts = sqlite.list_accounts()?;
+        let accounts: Vec<_> = if let Some(email) = specific_account {
+            accounts.into_iter().filter(|a| a.email == email).collect()
+        } else {
+            accounts
+        };
+
+        if accounts.is_empty() {
+            return Ok(if specific_account.is_some() {
+                format!("Account '{}' not found.", specific_account.unwrap())
+            } else {
+                "No connected accounts.".into()
+            });
+        }
+
+        let mut all_results = Vec::new();
+
+        for account in &accounts {
+            let access_token = match self.get_valid_token(&account.email).await {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            let encoded_query = urlencoding::encode(query);
+            let list_url = format!(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages?q={}&maxResults={}",
+                encoded_query, max_results
+            );
+
+            let list_resp = match self
+                .http
+                .get(&list_url)
+                .bearer_auth(&access_token)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(account = %account.email, error = %e, "Gmail list failed");
+                    continue;
+                }
+            };
+
+            let list_json: serde_json::Value = match list_resp.json().await {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
+
+            let messages = match list_json["messages"].as_array() {
+                Some(m) => m,
+                None => continue,
+            };
+
+            for msg in messages.iter().take(max_results as usize) {
+                let msg_id = match msg["id"].as_str() {
+                    Some(id) => id,
+                    None => continue,
+                };
+
+                let detail_url = format!(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}?format=metadata\
+                     &metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date",
+                    msg_id
+                );
+
+                let detail_json: serde_json::Value = match self
+                    .http
+                    .get(&detail_url)
+                    .bearer_auth(&access_token)
+                    .send()
+                    .await
+                {
+                    Ok(r) => match r.json().await {
+                        Ok(j) => j,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
+
+                let headers = detail_json["payload"]["headers"].as_array();
+                let get_header = |name: &str| -> String {
+                    headers
+                        .and_then(|h| {
+                            h.iter()
+                                .find(|hdr| hdr["name"].as_str() == Some(name))
+                                .and_then(|hdr| hdr["value"].as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_default()
+                };
+
+                let from = get_header("From");
+                let to = get_header("To");
+                let subject = get_header("Subject");
+                let date = get_header("Date");
+                let snippet = detail_json["snippet"].as_str().unwrap_or("");
+
+                all_results.push(format!(
+                    "* [{}] From: {} | To: {} | Subject: {} | Date: {} | Preview: {}",
+                    account.email, from, to, subject, date, snippet
+                ));
+            }
+        }
+
+        if all_results.is_empty() {
+            Ok(format!("No emails found matching '{}'.", query))
+        } else {
+            Ok(format!(
+                "Found {} email{} matching '{}':\n{}",
+                all_results.len(),
+                if all_results.len() == 1 { "" } else { "s" },
+                query,
+                all_results.join("\n")
+            ))
+        }
+    }
+
+    /// Search emails for use in `search_all` — limited to 3 results per account.
+    async fn search_emails_brief(&self, query: &str) -> Option<String> {
+        let input = serde_json::json!({"query": query, "max_results": 3});
+        self.tool_search_emails(&input)
+            .await
+            .ok()
+            .filter(|r| !r.contains("No emails found"))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Tasks: create
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -4213,7 +4360,7 @@ impl ChatEngine {
 
         // Determine which sources to query
         let all_sources = [
-            "memories", "entities", "imessage", "slack", "calendar", "tasks", "web",
+            "memories", "entities", "imessage", "slack", "email", "calendar", "tasks", "web",
         ];
         let requested: Vec<&str> = if let Some(arr) = input["sources"].as_array() {
             arr.iter().filter_map(|v| v.as_str()).collect()
@@ -4245,7 +4392,7 @@ impl ChatEngine {
             },
         );
 
-        let (slack_r, tasks_r) = tokio::join!(
+        let (slack_r, tasks_r, email_r) = tokio::join!(
             async {
                 if requested.contains(&"slack") {
                     self.tool_search_slack(&slack_query).await.ok()
@@ -4260,6 +4407,13 @@ impl ChatEngine {
                     self.tool_get_tasks_bulk(&serde_json::json!({"account_email": primary}))
                         .await
                         .ok()
+                } else {
+                    None
+                }
+            },
+            async {
+                if requested.contains(&"email") {
+                    self.search_emails_brief(query).await
                 } else {
                     None
                 }
@@ -4289,6 +4443,11 @@ impl ChatEngine {
         if let Some(r) = slack_r {
             if !r.contains("No Slack") && !r.is_empty() {
                 sections.push(format!("**Slack:**\n{r}"));
+            }
+        }
+        if let Some(r) = email_r {
+            if !r.is_empty() {
+                sections.push(format!("**Email:**\n{r}"));
             }
         }
         if let Some(r) = tasks_r {
