@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{info, warn};
+use std::time::Duration;
+use tracing::{debug, info, warn};
 use trusty_core::error::TrustyError;
 use trusty_email::auth::GoogleAuthClient;
 use trusty_models::{EventPayload, EventType, QueuedEvent};
@@ -70,7 +71,101 @@ pub async fn get_valid_token(sqlite: &SqliteStore, user_id: &str) -> anyhow::Res
     Ok(new_token.access_token)
 }
 
-async fn fetch_todays_context(sqlite: &SqliteStore) -> DailyContext {
+/// Geocode `address` via Nominatim, then query OpenRouteService foot-walking directions
+/// from `origin` to the geocoded destination. Returns a formatted string like "~12 min walk"
+/// or `None` on any error or missing data.
+async fn compute_travel_time(
+    origin: &str,
+    destination: &str,
+    ors_api_key: &str,
+    http: &reqwest::Client,
+) -> Option<String> {
+    // Step 1: geocode origin
+    let origin_coords = geocode(origin, http).await?;
+    // Step 2: geocode destination
+    let dest_coords = geocode(destination, http).await?;
+
+    // Step 3: ORS foot-walking directions (lon,lat order)
+    let url = format!(
+        "https://api.openrouteservice.org/v2/directions/foot-walking\
+         ?api_key={}&start={},{}&end={},{}",
+        ors_api_key, origin_coords.1, origin_coords.0, dest_coords.1, dest_coords.0,
+    );
+
+    let resp = http
+        .get(&url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| debug!("ORS request failed for '{}': {e}", destination))
+        .ok()?;
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| debug!("ORS parse failed for '{}': {e}", destination))
+        .ok()?;
+
+    let summary = &json["features"][0]["properties"]["summary"];
+    let duration_secs = match summary["duration"].as_f64() {
+        Some(d) => d,
+        None => {
+            debug!("ORS response missing duration for '{}'", destination);
+            return None;
+        }
+    };
+
+    let total_mins = (duration_secs / 60.0).round() as u64;
+    let label = if total_mins >= 60 {
+        let h = total_mins / 60;
+        let m = total_mins % 60;
+        if m == 0 {
+            format!("~{}h walk", h)
+        } else {
+            format!("~{}h {}min walk", h, m)
+        }
+    } else {
+        format!("~{} min walk", total_mins)
+    };
+
+    Some(label)
+}
+
+/// Geocode an address string to (lat, lon) via Nominatim.
+async fn geocode(address: &str, http: &reqwest::Client) -> Option<(f64, f64)> {
+    let encoded = urlencoding::encode(address);
+    let url = format!(
+        "https://nominatim.openstreetmap.org/search?format=json&limit=1&q={}",
+        encoded
+    );
+
+    let resp = http
+        .get(&url)
+        .header("User-Agent", "trusty-izzie/1.0 (bobmatnyc@gmail.com)")
+        .header("Accept-Language", "en")
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| debug!("Nominatim request failed for '{}': {e}", address))
+        .ok()?;
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| debug!("Nominatim parse failed for '{}': {e}", address))
+        .ok()?;
+
+    let first = json.as_array()?.first()?;
+    let lat = first["lat"].as_str()?.parse::<f64>().ok()?;
+    let lon = first["lon"].as_str()?.parse::<f64>().ok()?;
+    Some((lat, lon))
+}
+
+async fn fetch_todays_context(
+    sqlite: &SqliteStore,
+    user_location: &str,
+    ors_key: Option<&str>,
+) -> DailyContext {
     let accounts = match sqlite.list_accounts() {
         Ok(a) => a,
         Err(e) => {
@@ -107,7 +202,8 @@ async fn fetch_todays_context(sqlite: &SqliteStore) -> DailyContext {
             }
         };
         let tag = format!("[{}]", account.identity);
-        let events = fetch_calendar_events(&http, &access_token, &tag).await;
+        let events =
+            fetch_calendar_events(&http, &access_token, &tag, user_location, ors_key).await;
         let tasks = fetch_open_tasks(&http, &access_token, &tag).await;
         all_events.extend(events);
         all_tasks.extend(tasks);
@@ -138,6 +234,8 @@ async fn fetch_calendar_events(
     http: &reqwest::Client,
     access_token: &str,
     tag: &str,
+    user_location: &str,
+    ors_key: Option<&str>,
 ) -> Vec<String> {
     use chrono::{Local, LocalResult, TimeZone};
 
@@ -223,6 +321,15 @@ async fn fetch_calendar_events(
             };
             if !location.is_empty() {
                 l.push_str(&format!(" @ {}", location));
+                if !user_location.is_empty() {
+                    if let Some(key) = ors_key {
+                        if let Some(travel) =
+                            compute_travel_time(user_location, location, key, http).await
+                        {
+                            l.push_str(&format!(" (→ {})", travel));
+                        }
+                    }
+                }
             }
             if attendee_count > 1 {
                 l.push_str(&format!(" ({} attendees)", attendee_count));
@@ -340,13 +447,15 @@ impl EventHandler for MorningBriefingHandler {
             return Ok(schedule_next_morning(&store.sqlite));
         }
 
-        let context = fetch_todays_context(&store.sqlite).await;
-
         let location = store
             .sqlite
             .get_config("user_current_location")
             .unwrap_or(None)
             .unwrap_or_default();
+
+        let ors_key = std::env::var("ORS_API_KEY").ok();
+
+        let context = fetch_todays_context(&store.sqlite, &location, ors_key.as_deref()).await;
 
         let briefing = generate_briefing(
             &self.openrouter_base,
