@@ -215,6 +215,7 @@ impl ChatEngine {
             ToolName::GetCalendarEvents => self.tool_get_calendar_events(input).await,
             ToolName::CreateCalendarEvent => self.tool_create_calendar_event(input).await,
             ToolName::UpdateCalendarEvent => self.tool_update_calendar_event(input).await,
+            ToolName::UpdateUserLocation => self.tool_update_user_location(input),
             ToolName::GetPreferences => self.tool_get_preferences(),
             ToolName::SetPreference => self.tool_set_preference(input),
             ToolName::AddVipContact => self.tool_add_vip_contact(input),
@@ -2008,6 +2009,16 @@ impl ChatEngine {
         }
     }
 
+    fn tool_update_user_location(&self, input: &serde_json::Value) -> Result<String> {
+        let location = input["location"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Missing required parameter: location"))?;
+        self.sqlite_ref()?
+            .set_config("user_current_location", location)?;
+        Ok(format!("Location updated to: {}", location))
+    }
+
     async fn tool_get_task_lists(&self, input: &serde_json::Value) -> Result<String> {
         let account_email = input["account_email"].as_str().filter(|e| !e.is_empty());
         let primary_email =
@@ -3368,7 +3379,15 @@ Today is {}. Current time: {}.
 - **Timezone**: America/New_York (home base — may be travelling, see location below)
 - You are their personal assistant. Address them by name when appropriate. When they ask who they are or about themselves, use this information.
 - **Current location**: {user_location_line}
-- **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, local time, or train schedules.{style_section}
+- **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, local time, or train schedules.
+
+**LOCATION INFERENCE RULE:**
+- If the user mentions they are at a hotel, traveling, or in a different city, ask for their full address and call update_user_location once confirmed.
+- If the user asks for travel times or directions without a clear current location, ask: "Where are you right now?" before estimating.
+- If calendar events today are all in a different city than the stored location, ask: "I see your meetings are in [city from events] — what's your hotel address so I can give you accurate travel times?" Then call update_user_location with their reply.
+- Do not assume the stored location is current if the user seems to be traveling.
+- Only update when the user explicitly confirms — do not infer addresses without confirmation.
+{style_section}
 {context_section}{accounts_section}{prefs_section}{skills_section}
 
 ## My Deployment
@@ -3406,6 +3425,7 @@ I can check my own service status with `check_service_status`, report my version
 - `get_calendar_events` — fetch upcoming calendar events from ALL connected accounts. Optional: days (default 7, max 30). Optional: account_email — ONLY pass this when user explicitly asks for ONE specific account; omit for all general schedule queries to get work + personal combined.
 - `create_calendar_event` — create a new Google Calendar event. Required: account_email, title, start_datetime (RFC3339), end_datetime (RFC3339). Optional: description, attendees (array of email strings).
 - `update_calendar_event` — update an existing Google Calendar event. Use `get_calendar_events` first to find the event_id. Required: calendar_id, event_id, account_email. Optional: summary, start_time (RFC3339), end_time (RFC3339), description, location.
+- `update_user_location` — update the user's current location. Required: location (full address or description, e.g. "1 Hotel Central Park, 1414 Avenue of the Americas, New York, NY"). Call when the user tells you where they are staying or currently located. Used for travel time calculations in morning briefings.
 - `get_tasks_bulk` — fetches ALL task lists and ALL tasks for one account in a single call. Use this instead of get_task_lists + get_tasks. Required param: account_email.
 - `get_task_lists` — list the user's Google Task lists (optional: account_email to query a specific account)
 - `get_tasks` — fetch tasks from a list (optional: account_email, list_id, max_results, show_completed; default: incomplete tasks from primary list)

@@ -488,6 +488,26 @@ fn schedule_next_morning(sqlite: &SqliteStore) -> DispatchResult {
     )])
 }
 
+/// Extract a city name from a location string using a simple heuristic:
+/// take the last comma-separated component; if it looks like a ZIP code or
+/// single-word country, take the second-to-last instead.
+fn extract_city(location: &str) -> &str {
+    let parts: Vec<&str> = location.split(',').collect();
+    if parts.len() < 2 {
+        return location.trim();
+    }
+    let last = parts[parts.len() - 1].trim();
+    // If the last part is all digits/spaces (ZIP) or short uppercase (state/country abbreviation),
+    // use the second-to-last component.
+    let looks_like_zip_or_abbrev = last.chars().all(|c| c.is_ascii_digit() || c == ' ')
+        || (last.len() <= 3 && last.chars().all(|c| c.is_ascii_alphabetic()));
+    if looks_like_zip_or_abbrev && parts.len() >= 3 {
+        parts[parts.len() - 2].trim()
+    } else {
+        last
+    }
+}
+
 async fn generate_briefing(
     base: &str,
     key: &str,
@@ -525,6 +545,47 @@ async fn generate_briefing(
         ctx.tasks.join("\n")
     };
 
+    // City-mismatch check: if events appear to be in a different city than stored location,
+    // append a note so the LLM can ask the user for their hotel address.
+    let city_mismatch_note = {
+        // Find first non-empty event location by scanning ctx.events for " @ " marker.
+        let event_location = ctx.events.iter().find_map(|line| {
+            let at_pos = line.find(" @ ")?;
+            let after = &line[at_pos + 3..];
+            // Strip any trailing travel-time annotation " (→ ...)" or " (N attendees)"
+            let end = after.find(" (").unwrap_or(after.len());
+            let loc = after[..end].trim();
+            if loc.is_empty() {
+                None
+            } else {
+                Some(loc.to_string())
+            }
+        });
+
+        match event_location {
+            Some(ref ev_loc) if !location.is_empty() => {
+                let event_city = extract_city(ev_loc);
+                let user_city = extract_city(location);
+                let event_city_lower = event_city.to_lowercase();
+                let user_loc_lower = location.to_lowercase();
+                let user_city_lower = user_city.to_lowercase();
+                // Mismatch: event city not contained in user_location and vice versa.
+                if !user_loc_lower.contains(&event_city_lower)
+                    && !event_city_lower.contains(&user_city_lower)
+                {
+                    format!(
+                        "\nNote: stored location is \"{}\" but events appear to be in {}. \
+If the user is traveling, ask them for their hotel address.",
+                        location, event_city
+                    )
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        }
+    };
+
     let prompt = format!(
         "{}{}\
 Generate a morning briefing based on today's schedule and open tasks. \
@@ -533,8 +594,8 @@ Tone: dispassionate and factual. No pleasantries, no affirmations, no filler. \
 No phrases like \"Good morning\", \"Ready to crush it\", \"Have a great day\". \
 Lead with the most time-sensitive item. Style: briefing officer reading a sitrep, not a wellness app.\n\
 If any event has a location, estimate walking or transit time from the user's current location to the event venue and suggest a departure time. If travel time is uncertain, say so briefly.\n\n\
-Today's calendar:\n{}\n\nOpen tasks (all accounts):\n{}",
-        date_header, location_line, events_text, tasks_text
+Today's calendar:\n{}\n\nOpen tasks (all accounts):\n{}{}",
+        date_header, location_line, events_text, tasks_text, city_mismatch_note
     );
 
     let client = reqwest::Client::new();

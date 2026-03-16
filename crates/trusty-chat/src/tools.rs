@@ -95,6 +95,8 @@ pub enum ToolName {
     CreateCalendarEvent,
     /// Update an existing Google Calendar event.
     UpdateCalendarEvent,
+    /// Update the user's current location (used for travel time calculations).
+    UpdateUserLocation,
     /// Mark a Google Task as complete.
     CompleteTask,
     /// Fetch upcoming Metro North train departures between two stations.
