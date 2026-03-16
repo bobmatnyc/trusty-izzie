@@ -1,13 +1,14 @@
-//! Sends an evening briefing to the user via Telegram at 6pm local time.
+//! Sends an evening briefing to the user via Telegram at a configurable local time.
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 use trusty_core::error::TrustyError;
 use trusty_models::{EventPayload, EventType, QueuedEvent};
-use trusty_store::Store;
+use trusty_store::{SqliteStore, Store};
 
 use super::{DispatchResult, EventHandler};
+use crate::handlers::morning_briefing::{fetch_open_tasks, get_valid_token};
 use crate::scheduling::next_time_of_day_ts;
 use crate::telegram_push::send_telegram_push;
 
@@ -23,6 +24,136 @@ impl EveningBriefingHandler {
             openrouter_api_key,
         }
     }
+}
+
+struct EveningContext {
+    remaining_events: Vec<String>,
+    tasks: Vec<String>,
+}
+
+async fn fetch_evening_context(sqlite: &SqliteStore) -> EveningContext {
+    let accounts = match sqlite.list_accounts() {
+        Ok(a) => a,
+        Err(e) => {
+            warn!("Could not list accounts for evening briefing: {e}");
+            return EveningContext {
+                remaining_events: vec![],
+                tasks: vec![],
+            };
+        }
+    };
+
+    let active: Vec<_> = accounts.into_iter().filter(|a| a.is_active).collect();
+    if active.is_empty() {
+        return EveningContext {
+            remaining_events: vec![],
+            tasks: vec![],
+        };
+    }
+
+    let http = reqwest::Client::new();
+    let mut all_events = Vec::new();
+    let mut all_tasks = Vec::new();
+
+    for account in &active {
+        let access_token = match get_valid_token(sqlite, &account.email).await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(
+                    "Could not get OAuth token for {} in evening briefing: {e}",
+                    account.email
+                );
+                continue;
+            }
+        };
+        let tag = format!("[{}]", account.identity);
+        let events = fetch_remaining_events(&http, &access_token, &tag).await;
+        let tasks = fetch_open_tasks(&http, &access_token, &tag).await;
+        all_events.extend(events);
+        all_tasks.extend(tasks);
+    }
+
+    EveningContext {
+        remaining_events: all_events,
+        tasks: all_tasks,
+    }
+}
+
+async fn fetch_remaining_events(
+    http: &reqwest::Client,
+    access_token: &str,
+    tag: &str,
+) -> Vec<String> {
+    use chrono::{Local, LocalResult, TimeZone};
+
+    let now_utc = chrono::Utc::now();
+    let time_min_str = now_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    // time_max = end of today local (23:59:59)
+    let today = Local::now().date_naive();
+    let eod_naive = today.and_hms_opt(23, 59, 59).unwrap();
+    let eod_utc = match Local.from_local_datetime(&eod_naive) {
+        LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc),
+        LocalResult::Ambiguous(dt, _) => dt.with_timezone(&chrono::Utc),
+        LocalResult::None => now_utc + chrono::Duration::hours(6),
+    };
+    let time_max_str = eod_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    let url = format!(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events\
+         ?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=20",
+        time_min_str, time_max_str
+    );
+
+    let events_json: serde_json::Value = match http
+        .get(&url)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())
+    {
+        Err(e) => {
+            warn!("Calendar API request failed (evening): {e}");
+            return vec![];
+        }
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Calendar API parse failed (evening): {e}");
+                return vec![];
+            }
+        },
+    };
+
+    if events_json.get("error").is_some() {
+        return vec![];
+    }
+
+    let items = match events_json["items"].as_array() {
+        Some(a) if !a.is_empty() => a.clone(),
+        _ => return vec![],
+    };
+
+    let mut lines = Vec::new();
+    for item in &items {
+        if item["status"].as_str() == Some("cancelled") {
+            continue;
+        }
+        let summary = item["summary"].as_str().unwrap_or("(no title)");
+        let start = item["start"]["dateTime"]
+            .as_str()
+            .or_else(|| item["start"]["date"].as_str())
+            .unwrap_or("unknown time");
+        let location = item["location"].as_str().unwrap_or("");
+
+        let mut line = format!("• {} — {}", start, summary);
+        if !location.is_empty() {
+            line.push_str(&format!(" @ {}", location));
+        }
+        line.push_str(&format!(" {}", tag));
+        lines.push(line);
+    }
+    lines
 }
 
 #[async_trait]
@@ -43,34 +174,94 @@ impl EventHandler for EveningBriefingHandler {
             .unwrap_or_else(|| "true".to_string());
         if enabled != "true" {
             info!("EveningBriefing disabled by user pref");
-            return Ok(schedule_next_evening());
+            return Ok(schedule_next_evening(&store.sqlite));
         }
 
-        let briefing = generate_evening_briefing(&self.openrouter_base, &self.openrouter_api_key)
-            .await
-            .unwrap_or_else(|_| "End of day.".to_string());
+        let context = fetch_evening_context(&store.sqlite).await;
+
+        let location = store
+            .sqlite
+            .get_config("user_current_location")
+            .unwrap_or(None)
+            .unwrap_or_default();
+
+        let briefing = generate_evening_briefing(
+            &self.openrouter_base,
+            &self.openrouter_api_key,
+            &context,
+            &location,
+        )
+        .await
+        .unwrap_or_else(|_| "End of day.".to_string());
 
         send_telegram_push(&store.sqlite, &briefing).await?;
         info!("EveningBriefing sent");
 
-        Ok(schedule_next_evening())
+        Ok(schedule_next_evening(&store.sqlite))
     }
 }
 
-fn schedule_next_evening() -> DispatchResult {
+fn schedule_next_evening(sqlite: &SqliteStore) -> DispatchResult {
+    let hour = sqlite
+        .get_config("evening_briefing_hour")
+        .unwrap_or(None)
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|&h| (0..=23).contains(&h))
+        .unwrap_or(18) as u32;
+
     DispatchResult::Chain(vec![(
         EventType::EveningBriefing,
         EventPayload::EveningBriefing {},
-        next_time_of_day_ts(18, 0),
+        next_time_of_day_ts(hour, 0),
     )])
 }
 
-async fn generate_evening_briefing(base: &str, key: &str) -> Result<String, TrustyError> {
-    let prompt = "Generate a brief end-of-day status report. Bullet points or short sentences. \
-Tone: dispassionate and factual. No pleasantries, no affirmations, no filler. \
-No phrases like \"Hope you're winding down\", \"Great work today\", \"You've been busy\". \
-Lead with the most actionable item. Style: briefing officer reading a sitrep, not a wellness app. \
-2-3 items max.";
+async fn generate_evening_briefing(
+    base: &str,
+    key: &str,
+    ctx: &EveningContext,
+    location: &str,
+) -> Result<String, TrustyError> {
+    use chrono::Local;
+
+    let now = Local::now();
+    let date_header = format!(
+        "Today is {}, {} {}, {}. Current time: {} {}.\n",
+        now.format("%A"),
+        now.format("%B"),
+        now.format("%-d"),
+        now.format("%Y"),
+        now.format("%H:%M"),
+        now.format("%Z"),
+    );
+
+    let location_line = if location.is_empty() {
+        String::new()
+    } else {
+        format!("User's current location: {}\n", location)
+    };
+
+    let events_text = if ctx.remaining_events.is_empty() {
+        "No remaining events today".to_string()
+    } else {
+        ctx.remaining_events.join("\n")
+    };
+
+    let tasks_text = if ctx.tasks.is_empty() {
+        "No open tasks".to_string()
+    } else {
+        ctx.tasks.join("\n")
+    };
+
+    let prompt = format!(
+        "{}{}\
+Generate a brief end-of-day status. Bullet points. Tone: dispassionate and factual.\n\
+No pleasantries. Style: briefing officer reading a sitrep, not a wellness app.\n\
+2-3 items max. Lead with the most actionable item.\n\n\
+Remaining events today:\n{}\n\nOpen tasks:\n{}",
+        date_header, location_line, events_text, tasks_text
+    );
+
     let client = reqwest::Client::new();
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
     let resp = client

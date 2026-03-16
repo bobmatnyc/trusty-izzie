@@ -206,17 +206,29 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
         )?;
 
         // Proactive communications — seeded at startup (idempotent).
+        let morning_hour = sqlite
+            .get_config("morning_briefing_hour")
+            .unwrap_or(None)
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|&h| (0..=23).contains(&h))
+            .unwrap_or(7) as u32;
         seed_if_absent(
             sqlite,
             EventType::MorningBriefing,
             EventPayload::MorningBriefing {},
-            next_time_of_day_ts(8, 0),
+            next_time_of_day_ts(morning_hour, 0),
         )?;
+        let evening_hour = sqlite
+            .get_config("evening_briefing_hour")
+            .unwrap_or(None)
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|&h| (0..=23).contains(&h))
+            .unwrap_or(18) as u32;
         seed_if_absent(
             sqlite,
             EventType::EveningBriefing,
             EventPayload::EveningBriefing {},
-            next_time_of_day_ts(18, 0),
+            next_time_of_day_ts(evening_hour, 0),
         )?;
         seed_if_absent(
             sqlite,

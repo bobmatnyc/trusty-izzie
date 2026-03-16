@@ -1,4 +1,4 @@
-//! Sends a morning briefing to the user via Telegram at 8am local time.
+//! Sends a morning briefing to the user via Telegram at a configurable local time.
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ struct DailyContext {
 }
 
 /// Return a valid (non-expired) access token for `user_id`, refreshing if needed.
-async fn get_valid_token(sqlite: &SqliteStore, user_id: &str) -> anyhow::Result<String> {
+pub async fn get_valid_token(sqlite: &SqliteStore, user_id: &str) -> anyhow::Result<String> {
     let token = sqlite
         .get_oauth_token(user_id)?
         .ok_or_else(|| anyhow::anyhow!("No OAuth token stored for {}", user_id))?;
@@ -106,7 +106,7 @@ async fn fetch_todays_context(sqlite: &SqliteStore) -> DailyContext {
                 continue;
             }
         };
-        let tag = format!("[{}: {}]", account.identity, account.email);
+        let tag = format!("[{}]", account.identity);
         let events = fetch_calendar_events(&http, &access_token, &tag).await;
         let tasks = fetch_open_tasks(&http, &access_token, &tag).await;
         all_events.extend(events);
@@ -119,21 +119,46 @@ async fn fetch_todays_context(sqlite: &SqliteStore) -> DailyContext {
     }
 }
 
+/// Format a calendar datetime string (RFC3339 or date-only) into "Mon Mar 16, 9:00 AM".
+fn format_event_dt(dt_str: &str) -> (String, bool) {
+    // Try full datetime first
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(dt_str) {
+        use chrono::TimeZone as _;
+        let local = chrono::Local.from_utc_datetime(&dt.naive_utc());
+        return (local.format("%a %b %-d, %-I:%M %p").to_string(), false);
+    }
+    // Date-only (all-day events)
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(dt_str, "%Y-%m-%d") {
+        return (d.format("%a %b %-d").to_string(), true);
+    }
+    (dt_str.to_string(), false)
+}
+
 async fn fetch_calendar_events(
     http: &reqwest::Client,
     access_token: &str,
     tag: &str,
 ) -> Vec<String> {
-    let now = chrono::Utc::now();
-    let time_min = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let time_max = (now + chrono::Duration::days(1))
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    use chrono::{Local, LocalResult, TimeZone};
+
+    // time_min = local midnight today
+    let today = Local::now().date_naive();
+    let midnight = today.and_hms_opt(0, 0, 0).unwrap();
+    let time_min = match Local.from_local_datetime(&midnight) {
+        LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc),
+        LocalResult::Ambiguous(dt, _) => dt.with_timezone(&chrono::Utc),
+        LocalResult::None => chrono::Utc::now(),
+    };
+    // time_max = end of today (local midnight + 24h)
+    let time_max = time_min + chrono::Duration::days(1);
+
+    let time_min_str = time_min.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let time_max_str = time_max.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     let url = format!(
         "https://www.googleapis.com/calendar/v3/calendars/primary/events\
          ?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=20",
-        time_min, time_max
+        time_min_str, time_max_str
     );
 
     let events_json: serde_json::Value = match http
@@ -167,28 +192,62 @@ async fn fetch_calendar_events(
 
     let mut lines = Vec::new();
     for item in &items {
+        // Skip cancelled events
+        if item["status"].as_str() == Some("cancelled") {
+            continue;
+        }
+
         let summary = item["summary"].as_str().unwrap_or("(no title)");
-        let start = item["start"]["dateTime"]
-            .as_str()
-            .or_else(|| item["start"]["date"].as_str())
-            .unwrap_or("unknown time");
         let location = item["location"].as_str().unwrap_or("");
         let attendee_count = item["attendees"].as_array().map(|a| a.len()).unwrap_or(0);
 
-        let mut line = format!("• {} — {}", start, summary);
-        if !location.is_empty() {
-            line.push_str(&format!(" @ {}", location));
-        }
-        if attendee_count > 1 {
-            line.push_str(&format!(" ({} attendees)", attendee_count));
-        }
-        line.push_str(&format!(" {}", tag));
+        // Determine if all-day
+        let start_dt_str = item["start"]["dateTime"].as_str();
+        let start_date_str = item["start"]["date"].as_str();
+        let end_dt_str = item["end"]["dateTime"].as_str();
+
+        let line = if let Some(start_s) = start_dt_str {
+            let (start_fmt, _) = format_event_dt(start_s);
+            let end_part = end_dt_str
+                .map(|e| {
+                    let (ef, _) = format_event_dt(e);
+                    // strip the date prefix — keep only time portion after ", "
+                    ef.split_once(", ").map(|x| x.1).unwrap_or(&ef).to_string()
+                })
+                .unwrap_or_default();
+
+            let mut l = if end_part.is_empty() {
+                format!("• {} — {}", start_fmt, summary)
+            } else {
+                format!("• {}–{} — {}", start_fmt, end_part, summary)
+            };
+            if !location.is_empty() {
+                l.push_str(&format!(" @ {}", location));
+            }
+            if attendee_count > 1 {
+                l.push_str(&format!(" ({} attendees)", attendee_count));
+            }
+            l.push_str(&format!(" {}", tag));
+            l
+        } else if let Some(date_s) = start_date_str {
+            let (date_fmt, _) = format_event_dt(date_s);
+            let mut l = format!("• {}, All day — {}", date_fmt, summary);
+            l.push_str(&format!(" {}", tag));
+            l
+        } else {
+            continue;
+        };
+
         lines.push(line);
     }
     lines
 }
 
-async fn fetch_open_tasks(http: &reqwest::Client, access_token: &str, tag: &str) -> Vec<String> {
+pub async fn fetch_open_tasks(
+    http: &reqwest::Client,
+    access_token: &str,
+    tag: &str,
+) -> Vec<String> {
     let lists_resp: serde_json::Value = match http
         .get("https://tasks.googleapis.com/tasks/v1/users/@me/lists")
         .bearer_auth(access_token)
@@ -278,27 +337,45 @@ impl EventHandler for MorningBriefingHandler {
             .unwrap_or_else(|| "true".to_string());
         if enabled != "true" {
             info!("MorningBriefing disabled by user pref");
-            return Ok(schedule_next_morning());
+            return Ok(schedule_next_morning(&store.sqlite));
         }
 
         let context = fetch_todays_context(&store.sqlite).await;
 
-        let briefing = generate_briefing(&self.openrouter_base, &self.openrouter_api_key, &context)
-            .await
-            .unwrap_or_else(|_| "Here are today's priorities.".to_string());
+        let location = store
+            .sqlite
+            .get_config("user_current_location")
+            .unwrap_or(None)
+            .unwrap_or_default();
+
+        let briefing = generate_briefing(
+            &self.openrouter_base,
+            &self.openrouter_api_key,
+            &context,
+            &location,
+        )
+        .await
+        .unwrap_or_else(|_| "Here are today's priorities.".to_string());
 
         send_telegram_push(&store.sqlite, &briefing).await?;
         info!("MorningBriefing sent");
 
-        Ok(schedule_next_morning())
+        Ok(schedule_next_morning(&store.sqlite))
     }
 }
 
-fn schedule_next_morning() -> DispatchResult {
+fn schedule_next_morning(sqlite: &SqliteStore) -> DispatchResult {
+    let hour = sqlite
+        .get_config("morning_briefing_hour")
+        .unwrap_or(None)
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|&h| (0..=23).contains(&h))
+        .unwrap_or(7) as u32;
+
     DispatchResult::Chain(vec![(
         EventType::MorningBriefing,
         EventPayload::MorningBriefing {},
-        next_time_of_day_ts(8, 0),
+        next_time_of_day_ts(hour, 0),
     )])
 }
 
@@ -306,7 +383,27 @@ async fn generate_briefing(
     base: &str,
     key: &str,
     ctx: &DailyContext,
+    location: &str,
 ) -> Result<String, TrustyError> {
+    use chrono::Local;
+
+    let now = Local::now();
+    let date_header = format!(
+        "Today is {}, {} {}, {}. Current time: {} {}.\n",
+        now.format("%A"),
+        now.format("%B"),
+        now.format("%-d"),
+        now.format("%Y"),
+        now.format("%H:%M"),
+        now.format("%Z"),
+    );
+
+    let location_line = if location.is_empty() {
+        String::new()
+    } else {
+        format!("User's current location: {}\n", location)
+    };
+
     let events_text = if ctx.events.is_empty() {
         "No events today".to_string()
     } else {
@@ -320,13 +417,15 @@ async fn generate_briefing(
     };
 
     let prompt = format!(
-        "Generate a morning briefing based on today's schedule and open tasks. \
+        "{}{}\
+Generate a morning briefing based on today's schedule and open tasks. \
 Bullet points or short sentences. \
 Tone: dispassionate and factual. No pleasantries, no affirmations, no filler. \
 No phrases like \"Good morning\", \"Ready to crush it\", \"Have a great day\". \
-Lead with the most time-sensitive item. Style: briefing officer reading a sitrep, not a wellness app.\n\n\
-Today's calendar (next 24h, all accounts):\n{}\n\nOpen tasks (all accounts):\n{}",
-        events_text, tasks_text
+Lead with the most time-sensitive item. Style: briefing officer reading a sitrep, not a wellness app.\n\
+If any event has a location, estimate walking or transit time from the user's current location to the event venue and suggest a departure time. If travel time is uncertain, say so briefly.\n\n\
+Today's calendar:\n{}\n\nOpen tasks (all accounts):\n{}",
+        date_header, location_line, events_text, tasks_text
     );
 
     let client = reqwest::Client::new();
