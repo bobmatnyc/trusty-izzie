@@ -1594,6 +1594,21 @@ impl ChatEngine {
         }
     }
 
+    /// Strip HTML tags from a string, returning only text content.
+    fn strip_html(s: &str) -> String {
+        let mut result = String::new();
+        let mut in_tag = false;
+        for c in s.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                _ if !in_tag => result.push(c),
+                _ => {}
+            }
+        }
+        result.trim().to_string()
+    }
+
     /// Returns `(sort_key, formatted_line)` tuples for all non-cancelled events.
     /// `sort_key` is the raw `dateTime` or `date` string from the API, which sorts lexicographically.
     async fn fetch_calendar_events_for(
@@ -1704,12 +1719,23 @@ impl ChatEngine {
             }
 
             let location = item["location"].as_str().unwrap_or("");
+            let description = item["description"].as_str().unwrap_or("");
             let attendee_count = item["attendees"].as_array().map(|a| a.len()).unwrap_or(0);
             let event_id = item["id"].as_str().unwrap_or("");
 
             let mut line = format!("• {} — {}", time_range, summary);
             if !location.is_empty() {
                 line.push_str(&format!(" @ {}", location));
+            }
+            // Append description snippet (HTML-stripped, truncated to 200 chars)
+            let desc_clean = Self::strip_html(description);
+            if !desc_clean.is_empty() {
+                let snippet = if desc_clean.len() > 200 {
+                    format!("{}…", &desc_clean[..desc_clean.floor_char_boundary(200)])
+                } else {
+                    desc_clean
+                };
+                line.push_str(&format!(" | {}", snippet));
             }
             if attendee_count > 1 {
                 line.push_str(&format!(" ({} attendees)", attendee_count));
@@ -3381,12 +3407,24 @@ Today is {}. Current time: {}.
 - **Current location**: {user_location_line}
 - **Location awareness**: When the user mentions being somewhere ("I'm in Berlin", "just landed in Tokyo", "heading to London"), treat it as their current location and save it as a memory with category "location". Surface this naturally when relevant — e.g. if they ask about weather, restaurants, local time, or train schedules.
 
-**LOCATION INFERENCE RULE:**
-- If the user mentions they are at a hotel, traveling, or in a different city, ask for their full address and call update_user_location once confirmed.
-- If the user asks for travel times or directions without a clear current location, ask: "Where are you right now?" before estimating.
-- If calendar events today are all in a different city than the stored location, ask: "I see your meetings are in [city from events] — what's your hotel address so I can give you accurate travel times?" Then call update_user_location with their reply.
-- Do not assume the stored location is current if the user seems to be traveling.
-- Only update when the user explicitly confirms — do not infer addresses without confirmation.
+**LOCATION AWARENESS PROTOCOL:**
+When you need the user's current location (for travel times, directions, or logistics):
+1. FIRST: Call get_calendar_events and look for all-day events that mention hotels, stays, or accommodations. Calendar event locations often contain the full address.
+2. SECOND: Call search_all with keywords like "hotel confirmation", "booking", or "reservation" to find email confirmations.
+3. If you find a likely location: CONFIRM with the user — "I see you're staying at [address from calendar/email] — is that right?" Then call update_user_location on confirmation.
+4. Only ASK from scratch ("Where are you staying?") if steps 1–2 yield nothing.
+Never ask the user for information that is already in their calendar or searchable data.
+
+**PROACTIVE CONTEXT GATHERING:**
+Before answering questions about your schedule, meetings, travel, or logistics:
+- ALWAYS call get_calendar_events first — check event titles, locations, and descriptions
+- If the question involves venues, addresses, or people: also call search_all
+- If the user asks "where is my meeting?": the answer is in the calendar event's location field
+- If the user asks "what hotel am I at?": check all-day events and email confirmations
+- NEVER ask the user for information you can look up. Tools first, questions only if tools return nothing.
+
+**NEVER RE-ASK FOR FOUND DATA:**
+If a tool call already returned the information, do not ask the user to provide it again. If you found an address, a name, a venue, or any fact in a tool result, use it directly (confirm if uncertain, but do not ask as if you don't have it).
 {style_section}
 {context_section}{accounts_section}{prefs_section}{skills_section}
 

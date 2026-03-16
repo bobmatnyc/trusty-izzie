@@ -230,6 +230,21 @@ fn format_event_dt(dt_str: &str) -> (String, bool) {
     (dt_str.to_string(), false)
 }
 
+/// Strip HTML tags from a string, returning only text content.
+fn strip_html_tags(s: &str) -> String {
+    let mut result = String::new();
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => result.push(c),
+            _ => {}
+        }
+    }
+    result.trim().to_string()
+}
+
 async fn fetch_calendar_events(
     http: &reqwest::Client,
     access_token: &str,
@@ -297,6 +312,7 @@ async fn fetch_calendar_events(
 
         let summary = item["summary"].as_str().unwrap_or("(no title)");
         let location = item["location"].as_str().unwrap_or("");
+        let description = item["description"].as_str().unwrap_or("");
         let attendee_count = item["attendees"].as_array().map(|a| a.len()).unwrap_or(0);
 
         // Determine if all-day
@@ -331,6 +347,16 @@ async fn fetch_calendar_events(
                     }
                 }
             }
+            // Append description snippet (HTML-stripped, truncated to 200 chars)
+            let desc_clean = strip_html_tags(description);
+            if !desc_clean.is_empty() {
+                let snippet = if desc_clean.len() > 200 {
+                    format!("{}…", &desc_clean[..desc_clean.floor_char_boundary(200)])
+                } else {
+                    desc_clean
+                };
+                l.push_str(&format!(" | {}", snippet));
+            }
             if attendee_count > 1 {
                 l.push_str(&format!(" ({} attendees)", attendee_count));
             }
@@ -339,6 +365,16 @@ async fn fetch_calendar_events(
         } else if let Some(date_s) = start_date_str {
             let (date_fmt, _) = format_event_dt(date_s);
             let mut l = format!("• {}, All day — {}", date_fmt, summary);
+            // Append description snippet for all-day events too
+            let desc_clean = strip_html_tags(description);
+            if !desc_clean.is_empty() {
+                let snippet = if desc_clean.len() > 200 {
+                    format!("{}…", &desc_clean[..desc_clean.floor_char_boundary(200)])
+                } else {
+                    desc_clean
+                };
+                l.push_str(&format!(" | {}", snippet));
+            }
             l.push_str(&format!(" {}", tag));
             l
         } else {
