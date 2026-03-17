@@ -746,11 +746,28 @@ async fn oauth_callback_handler(
             "unknown@example.com".to_string()
         }
     };
+    // Fall back to the identity hint stored during /auth if userinfo didn't return an email.
+    let auth_email = if auth_email == "unknown@example.com" {
+        state
+            .sqlite
+            .get_config("oauth_pending_identity_email")
+            .ok()
+            .flatten()
+            .filter(|e| !e.is_empty() && e != "unknown@example.com")
+            .unwrap_or(auth_email)
+    } else {
+        auth_email
+    };
+    let _ = state.sqlite.set_config("oauth_pending_identity_email", "");
 
     // Store in oauth_tokens table (proper per-account path).
     let expires_at = body["expires_in"]
         .as_i64()
         .map(|secs| chrono::Utc::now().timestamp() + secs);
+    let granted_scopes = body["scope"]
+        .as_str()
+        .unwrap_or("https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/gmail.send")
+        .to_string();
     if let Err(e) = state.sqlite.upsert_oauth_token(
         &auth_email,
         &access_token,
@@ -760,7 +777,7 @@ async fn oauth_callback_handler(
             Some(refresh_token.as_str())
         },
         expires_at,
-        Some("https://mail.google.com/"),
+        Some(granted_scopes.as_str()),
     ) {
         error!("Failed to store oauth_token for {auth_email}: {e}");
     }
@@ -1020,6 +1037,12 @@ async fn webhook_handler(
 
     // Handle /auth command — generate PKCE link and send to user.
     if text.trim() == "/auth" || text.trim().starts_with("/auth ") {
+        // Extract optional email hint: /auth user@example.com
+        let login_hint_email: Option<&str> = text
+            .trim()
+            .strip_prefix("/auth ")
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let (verifier, challenge) = generate_pkce_pair();
         let state_value: String = {
             use rand::Rng;
@@ -1045,6 +1068,12 @@ async fn webhook_handler(
         let _ = state
             .sqlite
             .set_config("oauth_pending_chat_id", &chat_id.to_string());
+        // Store identity hint so callback can identify account if userinfo fails.
+        if let Some(hint) = login_hint_email {
+            let _ = state
+                .sqlite
+                .set_config("oauth_pending_identity_email", hint);
+        }
         let token = state.bot_token.clone();
         let http_auth = state.http.clone();
         tokio::spawn(async move {

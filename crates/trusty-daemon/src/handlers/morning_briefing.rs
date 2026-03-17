@@ -165,6 +165,7 @@ async fn fetch_todays_context(
     sqlite: &SqliteStore,
     user_location: &str,
     ors_key: Option<&str>,
+    maps_provider: &str,
 ) -> DailyContext {
     let accounts = match sqlite.list_accounts() {
         Ok(a) => a,
@@ -202,8 +203,15 @@ async fn fetch_todays_context(
             }
         };
         let tag = format!("[{}]", account.identity);
-        let events =
-            fetch_calendar_events(&http, &access_token, &tag, user_location, ors_key).await;
+        let events = fetch_calendar_events(
+            &http,
+            &access_token,
+            &tag,
+            user_location,
+            ors_key,
+            maps_provider,
+        )
+        .await;
         let tasks = fetch_open_tasks(&http, &access_token, &tag).await;
         all_events.extend(events);
         all_tasks.extend(tasks);
@@ -251,6 +259,7 @@ async fn fetch_calendar_events(
     tag: &str,
     user_location: &str,
     ors_key: Option<&str>,
+    maps_provider: &str,
 ) -> Vec<String> {
     use chrono::{Local, LocalResult, TimeZone};
 
@@ -336,11 +345,10 @@ async fn fetch_calendar_events(
                 format!("• {}–{} — {}", start_fmt, end_part, summary)
             };
             if !location.is_empty() {
-                let maps_url = format!(
-                    "https://maps.google.com/?q={}",
-                    urlencoding::encode(location)
-                );
-                l.push_str(&format!(" @ <a href=\"{}\">{}</a>", maps_url, location));
+                l.push_str(&format!(
+                    " @ {}",
+                    trusty_core::maps::maps_link(location, maps_provider)
+                ));
                 if !user_location.is_empty() {
                     if let Some(key) = ors_key {
                         if let Some(travel) =
@@ -494,8 +502,15 @@ impl EventHandler for MorningBriefingHandler {
             .unwrap_or_default();
 
         let ors_key = std::env::var("ORS_API_KEY").ok();
+        let maps_provider = store
+            .sqlite
+            .get_config("maps_provider")
+            .unwrap_or(None)
+            .unwrap_or_else(|| "google".to_string());
 
-        let context = fetch_todays_context(&store.sqlite, &location, ors_key.as_deref()).await;
+        let context =
+            fetch_todays_context(&store.sqlite, &location, ors_key.as_deref(), &maps_provider)
+                .await;
 
         let briefing = generate_briefing(
             &self.openrouter_base,

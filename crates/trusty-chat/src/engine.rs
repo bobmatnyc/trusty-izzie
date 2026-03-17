@@ -1726,11 +1726,15 @@ impl ChatEngine {
 
             let mut line = format!("• {} — {}", time_range, summary);
             if !location.is_empty() {
-                let maps_url = format!(
-                    "https://maps.google.com/?q={}",
-                    urlencoding::encode(location)
-                );
-                line.push_str(&format!(" @ <a href=\"{}\">{}</a>", maps_url, location));
+                let maps_provider = self
+                    .sqlite
+                    .as_deref()
+                    .and_then(|s| s.get_config("maps_provider").ok().flatten())
+                    .unwrap_or_else(|| "google".to_string());
+                line.push_str(&format!(
+                    " @ {}",
+                    trusty_core::maps::maps_link(location, &maps_provider)
+                ));
             }
             // Append description snippet (HTML-stripped, truncated to 200 chars)
             let desc_clean = Self::strip_html(description);

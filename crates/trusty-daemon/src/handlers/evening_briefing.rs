@@ -31,7 +31,7 @@ struct EveningContext {
     tasks: Vec<String>,
 }
 
-async fn fetch_evening_context(sqlite: &SqliteStore) -> EveningContext {
+async fn fetch_evening_context(sqlite: &SqliteStore, maps_provider: &str) -> EveningContext {
     let accounts = match sqlite.list_accounts() {
         Ok(a) => a,
         Err(e) => {
@@ -67,7 +67,7 @@ async fn fetch_evening_context(sqlite: &SqliteStore) -> EveningContext {
             }
         };
         let tag = format!("[{}]", account.identity);
-        let events = fetch_tomorrow_events(&http, &access_token, &tag).await;
+        let events = fetch_tomorrow_events(&http, &access_token, &tag, maps_provider).await;
         let tasks = fetch_open_tasks(&http, &access_token, &tag).await;
         all_events.extend(events);
         all_tasks.extend(tasks);
@@ -83,6 +83,7 @@ async fn fetch_tomorrow_events(
     http: &reqwest::Client,
     access_token: &str,
     tag: &str,
+    maps_provider: &str,
 ) -> Vec<String> {
     use chrono::{Local, LocalResult, TimeZone};
 
@@ -159,11 +160,10 @@ async fn fetch_tomorrow_events(
 
         let mut line = format!("• {} — {}", start, summary);
         if !location.is_empty() {
-            let maps_url = format!(
-                "https://maps.google.com/?q={}",
-                urlencoding::encode(location)
-            );
-            line.push_str(&format!(" @ <a href=\"{}\">{}</a>", maps_url, location));
+            line.push_str(&format!(
+                " @ {}",
+                trusty_core::maps::maps_link(location, maps_provider)
+            ));
         }
         line.push_str(&format!(" {}", tag));
         lines.push(line);
@@ -192,7 +192,13 @@ impl EventHandler for EveningBriefingHandler {
             return Ok(schedule_next_evening(&store.sqlite));
         }
 
-        let context = fetch_evening_context(&store.sqlite).await;
+        let maps_provider = store
+            .sqlite
+            .get_config("maps_provider")
+            .unwrap_or(None)
+            .unwrap_or_else(|| "google".to_string());
+
+        let context = fetch_evening_context(&store.sqlite, &maps_provider).await;
 
         let location = store
             .sqlite

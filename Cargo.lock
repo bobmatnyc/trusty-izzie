@@ -10148,6 +10148,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trusty-models",
+ "urlencoding",
 ]
 
 [[package]]

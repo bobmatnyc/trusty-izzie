@@ -33,7 +33,8 @@ impl GoogleAuthClient {
 
     /// Generate the Google consent URL the user must visit to grant access.
     pub fn authorization_url(&self) -> String {
-        let scope = "https://mail.google.com/ \
+        let scope = "openid email profile \
+                     https://mail.google.com/ \
                      https://www.googleapis.com/auth/calendar \
                      https://www.googleapis.com/auth/tasks \
                      https://www.googleapis.com/auth/drive.readonly \
@@ -143,7 +144,8 @@ impl GoogleAuthClient {
     ///
     /// Callers must pass the `code_challenge` produced by [`generate_pkce_pair`].
     pub fn authorization_url_pkce(&self, code_challenge: &str) -> String {
-        let scope = "https://mail.google.com/ \
+        let scope = "openid email profile \
+                     https://mail.google.com/ \
                      https://www.googleapis.com/auth/calendar \
                      https://www.googleapis.com/auth/tasks \
                      https://www.googleapis.com/auth/drive.readonly \
