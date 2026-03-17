@@ -336,7 +336,11 @@ async fn fetch_calendar_events(
                 format!("• {}–{} — {}", start_fmt, end_part, summary)
             };
             if !location.is_empty() {
-                l.push_str(&format!(" @ {}", location));
+                let maps_url = format!(
+                    "https://maps.google.com/?q={}",
+                    urlencoding::encode(location)
+                );
+                l.push_str(&format!(" @ <a href=\"{}\">{}</a>", maps_url, location));
                 if !user_location.is_empty() {
                     if let Some(key) = ors_key {
                         if let Some(travel) =

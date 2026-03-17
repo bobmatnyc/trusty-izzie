@@ -159,7 +159,11 @@ async fn fetch_tomorrow_events(
 
         let mut line = format!("• {} — {}", start, summary);
         if !location.is_empty() {
-            line.push_str(&format!(" @ {}", location));
+            let maps_url = format!(
+                "https://maps.google.com/?q={}",
+                urlencoding::encode(location)
+            );
+            line.push_str(&format!(" @ <a href=\"{}\">{}</a>", maps_url, location));
         }
         line.push_str(&format!(" {}", tag));
         lines.push(line);

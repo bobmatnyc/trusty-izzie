@@ -1726,7 +1726,11 @@ impl ChatEngine {
 
             let mut line = format!("• {} — {}", time_range, summary);
             if !location.is_empty() {
-                line.push_str(&format!(" @ {}", location));
+                let maps_url = format!(
+                    "https://maps.google.com/?q={}",
+                    urlencoding::encode(location)
+                );
+                line.push_str(&format!(" @ <a href=\"{}\">{}</a>", maps_url, location));
             }
             // Append description snippet (HTML-stripped, truncated to 200 chars)
             let desc_clean = Self::strip_html(description);
