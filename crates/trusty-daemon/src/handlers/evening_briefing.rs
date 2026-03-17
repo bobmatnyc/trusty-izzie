@@ -27,7 +27,7 @@ impl EveningBriefingHandler {
 }
 
 struct EveningContext {
-    remaining_events: Vec<String>,
+    tomorrow_events: Vec<String>,
     tasks: Vec<String>,
 }
 
@@ -37,7 +37,7 @@ async fn fetch_evening_context(sqlite: &SqliteStore) -> EveningContext {
         Err(e) => {
             warn!("Could not list accounts for evening briefing: {e}");
             return EveningContext {
-                remaining_events: vec![],
+                tomorrow_events: vec![],
                 tasks: vec![],
             };
         }
@@ -46,7 +46,7 @@ async fn fetch_evening_context(sqlite: &SqliteStore) -> EveningContext {
     let active: Vec<_> = accounts.into_iter().filter(|a| a.is_active).collect();
     if active.is_empty() {
         return EveningContext {
-            remaining_events: vec![],
+            tomorrow_events: vec![],
             tasks: vec![],
         };
     }
@@ -67,19 +67,19 @@ async fn fetch_evening_context(sqlite: &SqliteStore) -> EveningContext {
             }
         };
         let tag = format!("[{}]", account.identity);
-        let events = fetch_remaining_events(&http, &access_token, &tag).await;
+        let events = fetch_tomorrow_events(&http, &access_token, &tag).await;
         let tasks = fetch_open_tasks(&http, &access_token, &tag).await;
         all_events.extend(events);
         all_tasks.extend(tasks);
     }
 
     EveningContext {
-        remaining_events: all_events,
+        tomorrow_events: all_events,
         tasks: all_tasks,
     }
 }
 
-async fn fetch_remaining_events(
+async fn fetch_tomorrow_events(
     http: &reqwest::Client,
     access_token: &str,
     tag: &str,
@@ -87,17 +87,28 @@ async fn fetch_remaining_events(
     use chrono::{Local, LocalResult, TimeZone};
 
     let now_utc = chrono::Utc::now();
-    let time_min_str = now_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    // time_max = end of today local (23:59:59)
-    let today = Local::now().date_naive();
-    let eod_naive = today.and_hms_opt(23, 59, 59).unwrap();
-    let eod_utc = match Local.from_local_datetime(&eod_naive) {
+    // time_min = midnight tonight (start of tomorrow local)
+    let tomorrow = Local::now()
+        .date_naive()
+        .succ_opt()
+        .unwrap_or_else(|| Local::now().date_naive());
+    let tom_midnight = tomorrow.and_hms_opt(0, 0, 0).unwrap();
+    let time_min_utc = match Local.from_local_datetime(&tom_midnight) {
         LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc),
         LocalResult::Ambiguous(dt, _) => dt.with_timezone(&chrono::Utc),
-        LocalResult::None => now_utc + chrono::Duration::hours(6),
+        LocalResult::None => now_utc + chrono::Duration::hours(2),
     };
-    let time_max_str = eod_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let time_min_str = time_min_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    // time_max = end of tomorrow local (23:59:59)
+    let tom_eod = tomorrow.and_hms_opt(23, 59, 59).unwrap();
+    let time_max_utc = match Local.from_local_datetime(&tom_eod) {
+        LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc),
+        LocalResult::Ambiguous(dt, _) => dt.with_timezone(&chrono::Utc),
+        LocalResult::None => time_min_utc + chrono::Duration::hours(24),
+    };
+    let time_max_str = time_max_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     let url = format!(
         "https://www.googleapis.com/calendar/v3/calendars/primary/events\
@@ -207,7 +218,7 @@ fn schedule_next_evening(sqlite: &SqliteStore) -> DispatchResult {
         .unwrap_or(None)
         .and_then(|v| v.parse::<i64>().ok())
         .filter(|&h| (0..=23).contains(&h))
-        .unwrap_or(18) as u32;
+        .unwrap_or(22) as u32;
 
     DispatchResult::Chain(vec![(
         EventType::EveningBriefing,
@@ -241,10 +252,10 @@ async fn generate_evening_briefing(
         format!("User's current location: {}\n", location)
     };
 
-    let events_text = if ctx.remaining_events.is_empty() {
-        "No remaining events today".to_string()
+    let events_text = if ctx.tomorrow_events.is_empty() {
+        "No events tomorrow".to_string()
     } else {
-        ctx.remaining_events.join("\n")
+        ctx.tomorrow_events.join("\n")
     };
 
     let tasks_text = if ctx.tasks.is_empty() {
@@ -255,10 +266,13 @@ async fn generate_evening_briefing(
 
     let prompt = format!(
         "{}{}\
-Generate a brief end-of-day status. Bullet points. Tone: dispassionate and factual.\n\
-No pleasantries. Style: briefing officer reading a sitrep, not a wellness app.\n\
-2-3 items max. Lead with the most actionable item.\n\n\
-Remaining events today:\n{}\n\nOpen tasks:\n{}",
+Preview tomorrow's schedule and any reminders. Bullet points. \
+Tone: dispassionate and factual. No pleasantries, no filler. \
+Style: briefing officer, not a wellness app.\n\
+Lead with the earliest event. If events have locations, mention them. \
+Note anything that needs preparation (early start, materials, travel).\n\
+2-4 items max.\n\n\
+Tomorrow's schedule:\n{}\n\nOpen tasks:\n{}",
         date_header, location_line, events_text, tasks_text
     );
 

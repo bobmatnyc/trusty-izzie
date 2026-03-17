@@ -223,7 +223,7 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
             .unwrap_or(None)
             .and_then(|v| v.parse::<i64>().ok())
             .filter(|&h| (0..=23).contains(&h))
-            .unwrap_or(18) as u32;
+            .unwrap_or(22) as u32;
         seed_if_absent(
             sqlite,
             EventType::EveningBriefing,
