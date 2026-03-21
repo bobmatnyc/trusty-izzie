@@ -260,6 +260,43 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
             EventPayload::StyleTraining {},
             now + 3600,
         )?;
+        let junk_interval = sqlite
+            .get_config("junk_mail_archive_interval_minutes")
+            .unwrap_or(None)
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|&m| (10..=1440).contains(&m))
+            .unwrap_or(60);
+        seed_if_absent(
+            sqlite,
+            EventType::JunkMailArchive,
+            EventPayload::JunkMailArchive {},
+            now + (junk_interval as i64 * 60),
+        )?;
+
+        // Seed default inbox rules if none exist yet.
+        let rules = sqlite.list_inbox_rules()?;
+        if rules.is_empty() {
+            sqlite.create_inbox_rule(
+                "Promotions",
+                "in:inbox category:promotions older_than:2d",
+                "archive",
+                None,
+            )?;
+            sqlite.create_inbox_rule(
+                "Social notifications",
+                "in:inbox category:social older_than:2d",
+                "archive",
+                None,
+            )?;
+            sqlite.create_inbox_rule(
+                "Updates & notifications",
+                "in:inbox category:updates older_than:3d",
+                "archive",
+                None,
+            )?;
+            sqlite.create_inbox_rule("Spam", "in:inbox label:spam", "trash", None)?;
+            info!("Seeded 4 default inbox rules");
+        }
     }
 
     let agents_dir = std::path::PathBuf::from(&config.agents.agents_dir);

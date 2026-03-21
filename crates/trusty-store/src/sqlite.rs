@@ -35,6 +35,19 @@ pub struct AccountStatus {
     pub has_oauth_token: bool,
 }
 
+/// An inbox filter rule that drives the junk-mail archiver.
+#[derive(Debug, Clone)]
+pub struct InboxRule {
+    pub id: String,
+    pub name: String,
+    pub gmail_query: String,
+    pub action: String, // "archive", "trash", "label"
+    pub action_label: Option<String>,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// Aggregated operational state returned by `get_status_data`.
 #[derive(Debug, Clone)]
 pub struct StatusData {
@@ -235,6 +248,19 @@ impl SqliteStore {
                 source       TEXT NOT NULL DEFAULT 'chat'
             );
             CREATE INDEX IF NOT EXISTS idx_pa_status ON pending_actions(status, proposed_at DESC);
+
+            CREATE TABLE IF NOT EXISTS inbox_rules (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                gmail_query  TEXT NOT NULL,
+                action       TEXT NOT NULL DEFAULT 'archive'
+                             CHECK(action IN ('archive', 'trash', 'label')),
+                action_label TEXT,
+                enabled      INTEGER NOT NULL DEFAULT 1,
+                created_at   INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ir_enabled ON inbox_rules(enabled, name ASC);
             "#,
         )?;
 
@@ -1621,6 +1647,111 @@ impl SqliteStore {
         conn.execute(
             "UPDATE pending_actions SET status='failed', result=?2, resolved_at=unixepoch() WHERE id=?1",
             rusqlite::params![id, error],
+        )?;
+        Ok(())
+    }
+
+    // ── Inbox rules ────────────────────────────────────────────────────────
+
+    /// List all inbox filter rules, sorted by name.
+    pub fn list_inbox_rules(&self) -> Result<Vec<InboxRule>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, gmail_query, action, action_label, enabled, created_at, updated_at \
+             FROM inbox_rules ORDER BY name ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(InboxRule {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    gmail_query: row.get(2)?,
+                    action: row.get(3)?,
+                    action_label: row.get(4)?,
+                    enabled: row.get::<_, i64>(5)? != 0,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Get a single inbox rule by ID.
+    pub fn get_inbox_rule(&self, id: &str) -> Result<Option<InboxRule>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, gmail_query, action, action_label, enabled, created_at, updated_at \
+             FROM inbox_rules WHERE id = ?1",
+        )?;
+        let result = stmt
+            .query_row(rusqlite::params![id], |row| {
+                Ok(InboxRule {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    gmail_query: row.get(2)?,
+                    action: row.get(3)?,
+                    action_label: row.get(4)?,
+                    enabled: row.get::<_, i64>(5)? != 0,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })
+            .optional()?;
+        Ok(result)
+    }
+
+    /// Create a new inbox filter rule. Returns the new rule's ID.
+    pub fn create_inbox_rule(
+        &self,
+        name: &str,
+        gmail_query: &str,
+        action: &str,
+        action_label: Option<&str>,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        conn.execute(
+            "INSERT INTO inbox_rules (id, name, gmail_query, action, action_label, enabled, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)",
+            rusqlite::params![id, name, gmail_query, action, action_label, now, now],
+        )?;
+        Ok(id)
+    }
+
+    /// Enable or disable an inbox rule.
+    pub fn update_inbox_rule(&self, id: &str, enabled: bool) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        conn.execute(
+            "UPDATE inbox_rules SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, enabled as i64, now],
+        )?;
+        Ok(())
+    }
+
+    /// Delete an inbox rule by ID.
+    pub fn delete_inbox_rule(&self, id: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("SQLite mutex poisoned: {e}"))?;
+        conn.execute(
+            "DELETE FROM inbox_rules WHERE id = ?1",
+            rusqlite::params![id],
         )?;
         Ok(())
     }

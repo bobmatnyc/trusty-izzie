@@ -142,6 +142,12 @@ pub enum ToolName {
     SerpApiSearch,
     /// Report Izzie's own operational state: accounts, skills, knowledge base counts, integrations.
     GetIzzieStatus,
+    /// List all inbox filter rules.
+    ListInboxRules,
+    /// Add a new inbox filter rule.
+    AddInboxRule,
+    /// Remove an inbox filter rule by ID.
+    RemoveInboxRule,
 }
 
 /// A parsed tool call request from the LLM.

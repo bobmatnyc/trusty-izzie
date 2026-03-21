@@ -266,6 +266,9 @@ impl ChatEngine {
             ToolName::SkyvernTask => self.tool_skyvern_task(input).await,
             ToolName::SerpApiSearch => self.tool_serpapi_search(input).await,
             ToolName::GetIzzieStatus => self.tool_get_status().await,
+            ToolName::ListInboxRules => self.tool_list_inbox_rules(),
+            ToolName::AddInboxRule => self.tool_add_inbox_rule(input),
+            ToolName::RemoveInboxRule => self.tool_remove_inbox_rule(input),
             _ => {
                 tracing::warn!(tool = ?name, "tool called but not yet implemented");
                 Ok("Tool not yet implemented.".to_string())
@@ -450,6 +453,7 @@ impl ChatEngine {
             EventType::TrainDelayCheck => EventPayload::TrainDelayCheck {},
             EventType::WeatherCheck => EventPayload::WeatherCheck {},
             EventType::StyleTraining => EventPayload::StyleTraining {},
+            EventType::JunkMailArchive => EventPayload::JunkMailArchive {},
         };
 
         let id = self.sqlite_ref()?.enqueue_event(
@@ -2462,6 +2466,68 @@ impl ChatEngine {
         serde_json::to_string(&json).context("failed to serialize contacts")
     }
 
+    // ── Inbox rule tools ─────────────────────────────────────────────────────
+
+    fn tool_list_inbox_rules(&self) -> Result<String> {
+        let rules = self.sqlite_ref()?.list_inbox_rules()?;
+        if rules.is_empty() {
+            return Ok("No inbox rules configured.".to_string());
+        }
+        let json: Vec<serde_json::Value> = rules
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "gmail_query": r.gmail_query,
+                    "action": r.action,
+                    "action_label": r.action_label,
+                    "enabled": r.enabled,
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&json).context("failed to serialize inbox rules")
+    }
+
+    fn tool_add_inbox_rule(&self, input: &serde_json::Value) -> Result<String> {
+        let name = input["name"].as_str().unwrap_or("").trim().to_string();
+        let gmail_query = input["gmail_query"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let action = input["action"]
+            .as_str()
+            .unwrap_or("archive")
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            return Ok("Error: name is required".to_string());
+        }
+        if gmail_query.is_empty() {
+            return Ok("Error: gmail_query is required".to_string());
+        }
+        if !matches!(action.as_str(), "archive" | "trash") {
+            return Ok("Error: action must be 'archive' or 'trash'".to_string());
+        }
+        let id = self
+            .sqlite_ref()?
+            .create_inbox_rule(&name, &gmail_query, &action, None)?;
+        Ok(format!(
+            "Inbox rule '{}' created (id: {}). It will run on the next hourly inbox check.",
+            name, id
+        ))
+    }
+
+    fn tool_remove_inbox_rule(&self, input: &serde_json::Value) -> Result<String> {
+        let id = input["id"].as_str().unwrap_or("").trim().to_string();
+        if id.is_empty() {
+            return Ok("Error: id is required".to_string());
+        }
+        self.sqlite_ref()?.delete_inbox_rule(&id)?;
+        Ok(format!("Inbox rule {} removed.", id))
+    }
+
     fn tool_add_watch_subscription(&self, input: &serde_json::Value) -> Result<String> {
         let topic = input["topic"].as_str().unwrap_or("").trim();
         if topic.is_empty() {
@@ -3487,6 +3553,9 @@ I can check my own service status with `check_service_status`, report my version
 - `set_preference` — toggle features on/off or adjust timing
 - `add_vip_contact` / `remove_vip_contact` / `list_vip_contacts` — manage priority contacts
 - `add_watch_subscription` / `remove_watch_subscription` / `list_watch_subscriptions` — monitor topics
+- `list_inbox_rules` — show all email filter rules used by the hourly inbox cleaner
+- `add_inbox_rule` — create a new filter rule. Required: name (string), gmail_query (Gmail search syntax), action ("archive" or "trash")
+- `remove_inbox_rule` — delete a filter rule by ID. Required: id (string)
 - `list_open_loops` — see pending follow-ups
 - `dismiss_open_loop` — dismiss a follow-up reminder
 - `search_imessages`: Search iMessage history. Params: contact (string, partial match), query (keyword in text), limit (default 20), days_back (default 30), from_me (bool). Returns array of messages with contact, text, timestamp.
@@ -3532,6 +3601,13 @@ I proactively send you briefings and updates. You can customize these:
 - Use `add_vip_contact` / `list_vip_contacts` to manage priority contacts
 - Use `add_watch_subscription` to monitor topics
 - Use `list_open_loops` to see pending follow-ups
+
+## Inbox Management
+I automatically clean your inbox every hour using configurable filter rules.
+- `list_inbox_rules`: Show all email filter rules (name, query, action, enabled status)
+- `add_inbox_rule`: Create a new filter (name, gmail_query, action: archive|trash)
+- `remove_inbox_rule`: Delete a filter rule by ID
+Default rules: Promotions (archive), Social notifications (archive), Updates & notifications (archive), Spam (trash). Suggest new rules when you notice recurring noise patterns in the user's email.
 
 I do NOT have `read_file`, `write_file`, or `list_directory` tools. To access the file system, use `execute_shell_command` with commands like `ls`, `cat`, etc.
 

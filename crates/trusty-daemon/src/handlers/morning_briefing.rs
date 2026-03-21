@@ -643,12 +643,12 @@ If the user is traveling, ask them for their hotel address.",
 
     let prompt = format!(
         "{}{}\
-Generate a morning briefing based on today's schedule and open tasks. \
-Bullet points or short sentences. \
-Tone: dispassionate and factual. No pleasantries, no affirmations, no filler. \
-No phrases like \"Good morning\", \"Ready to crush it\", \"Have a great day\". \
-Lead with the most time-sensitive item. Style: briefing officer reading a sitrep, not a wellness app.\n\
-If any event has a location, estimate walking or transit time from the user's current location to the event venue and suggest a departure time. If travel time is uncertain, say so briefly.\n\n\
+Generate a morning briefing focused on today's schedule and any reminders. \
+Bullet points. Tone: dispassionate and factual. No pleasantries, no filler. \
+Style: briefing officer, not a wellness app.\n\
+Lead with the earliest event. If events have locations, mention them. \
+Note anything that needs preparation (early start, materials, travel).\n\
+2-4 items max.\n\n\
 Today's calendar:\n{}\n\nOpen tasks (all accounts):\n{}{}",
         date_header, location_line, events_text, tasks_text, city_mismatch_note
     );

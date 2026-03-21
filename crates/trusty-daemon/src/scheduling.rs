@@ -13,6 +13,12 @@ pub fn next_time_of_day_ts(hour: u32, minute: u32) -> i64 {
     }
 }
 
+/// Returns Unix timestamp `interval_minutes` from now.
+pub fn next_interval_ts(interval_minutes: u32) -> i64 {
+    let now = chrono::Local::now();
+    (now + chrono::Duration::minutes(interval_minutes as i64)).timestamp()
+}
+
 /// Returns Unix timestamp for the next occurrence of `weekday` at HH:MM local time.
 pub fn next_weekly_ts(weekday: chrono::Weekday, hour: u32, minute: u32) -> i64 {
     use chrono::{Datelike, Local, TimeZone};

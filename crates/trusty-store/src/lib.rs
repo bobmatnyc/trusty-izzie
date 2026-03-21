@@ -11,7 +11,7 @@ pub mod sqlite;
 
 pub use graph::GraphStore;
 pub use lance::LanceStore;
-pub use sqlite::SqliteStore;
+pub use sqlite::{InboxRule, SqliteStore};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
