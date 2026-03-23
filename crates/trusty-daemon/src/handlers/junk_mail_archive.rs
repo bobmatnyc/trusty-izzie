@@ -109,18 +109,29 @@ async fn process_account(
     let mut stats: ArchiveStats = HashMap::new();
 
     for rule in rules.iter().filter(|r| r.enabled) {
+        info!(
+            "JunkMailArchive: [{account_email}] running rule '{}' (action={}, query={})",
+            rule.name, rule.action, rule.gmail_query
+        );
         let ids = match list_message_ids_for_query(http, access_token, &rule.gmail_query).await {
             Ok(ids) => ids,
             Err(e) => {
                 warn!(
-                    "JunkMailArchive: rule '{}' failed to list messages for {account_email}: {e}",
+                    "JunkMailArchive: [{account_email}] rule '{}' query failed: {e}",
                     rule.name
                 );
                 continue;
             }
         };
 
+        info!(
+            "JunkMailArchive: [{account_email}] rule '{}' matched {} messages",
+            rule.name,
+            ids.len()
+        );
+
         let mut count = 0usize;
+        let mut failed = 0usize;
         for id in &ids {
             let applied = match rule.action.as_str() {
                 "trash" => modify_message(http, access_token, id, &["INBOX"], &["TRASH"]).await,
@@ -128,6 +139,10 @@ async fn process_account(
                     if let Some(label) = rule.action_label.as_deref() {
                         modify_message(http, access_token, id, &[], &[label]).await
                     } else {
+                        warn!(
+                            "JunkMailArchive: [{account_email}] rule '{}' has action=label but no action_label set",
+                            rule.name
+                        );
                         false
                     }
                 }
@@ -138,7 +153,21 @@ async fn process_account(
             };
             if applied {
                 count += 1;
+            } else {
+                failed += 1;
             }
+        }
+
+        if failed > 0 {
+            warn!(
+                "JunkMailArchive: [{account_email}] rule '{}': {count} succeeded, {failed} failed",
+                rule.name
+            );
+        } else if count > 0 {
+            info!(
+                "JunkMailArchive: [{account_email}] rule '{}': {} {}",
+                rule.name, rule.action, count
+            );
         }
 
         stats.insert(
@@ -207,6 +236,13 @@ impl EventHandler for JunkMailArchiveHandler {
             return Ok(schedule_next_archive(&store.sqlite));
         }
 
+        let run_start = std::time::Instant::now();
+        info!(
+            "JunkMailArchive: starting run — {} accounts, {} enabled rules",
+            active.len(),
+            enabled_rules.len()
+        );
+
         let http = reqwest::Client::new();
         // Aggregate counts across all accounts, keyed by rule name.
         let mut totals: HashMap<String, RuleStats> = HashMap::new();
@@ -237,6 +273,15 @@ impl EventHandler for JunkMailArchiveHandler {
                 entry.count += rs.count;
             }
         }
+
+        // Summary log.
+        let total_processed: usize = totals.values().map(|rs| rs.count).sum();
+        let elapsed = run_start.elapsed();
+        info!(
+            "JunkMailArchive: run complete — {total_processed} messages processed across {} accounts in {:.1}s",
+            active.len(),
+            elapsed.as_secs_f64()
+        );
 
         // Build notification sorted by rule name.
         let any_action = totals.values().any(|rs| rs.count > 0);
