@@ -276,12 +276,11 @@ async fn generate_evening_briefing(
 
     let prompt = format!(
         "{}{}\
-Preview tomorrow's schedule and any reminders. Bullet points. \
-Tone: dispassionate and factual. No pleasantries, no filler. \
-Style: briefing officer, not a wellness app.\n\
-Lead with the earliest event. If events have locations, mention them. \
-Note anything that needs preparation (early start, materials, travel).\n\
-2-4 items max.\n\n\
+Give a quick preview of tomorrow's schedule. Plain, direct, no filler. \
+Just list what's on the calendar with times and locations. \
+Flag anything that needs prep tonight (early start, packing, materials, travel). \
+If nothing notable, say so in one line.\n\
+Keep it short — 2-4 bullet points max.\n\n\
 Tomorrow's schedule:\n{}\n\nOpen tasks:\n{}",
         date_header, location_line, events_text, tasks_text
     );

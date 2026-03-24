@@ -536,10 +536,17 @@ fn schedule_next_morning(sqlite: &SqliteStore) -> DispatchResult {
         .filter(|&h| (0..=23).contains(&h))
         .unwrap_or(7) as u32;
 
+    let minute = sqlite
+        .get_config("morning_briefing_minute")
+        .unwrap_or(None)
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|&m| (0..=59).contains(&m))
+        .unwrap_or(30) as u32;
+
     DispatchResult::Chain(vec![(
         EventType::MorningBriefing,
         EventPayload::MorningBriefing {},
-        next_time_of_day_ts(hour, 0),
+        next_time_of_day_ts(hour, minute),
     )])
 }
 

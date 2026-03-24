@@ -212,11 +212,17 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
             .and_then(|v| v.parse::<i64>().ok())
             .filter(|&h| (0..=23).contains(&h))
             .unwrap_or(7) as u32;
+        let morning_minute = sqlite
+            .get_config("morning_briefing_minute")
+            .unwrap_or(None)
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|&m| (0..=59).contains(&m))
+            .unwrap_or(30) as u32;
         seed_if_absent(
             sqlite,
             EventType::MorningBriefing,
             EventPayload::MorningBriefing {},
-            next_time_of_day_ts(morning_hour, 0),
+            next_time_of_day_ts(morning_hour, morning_minute),
         )?;
         let evening_hour = sqlite
             .get_config("evening_briefing_hour")
