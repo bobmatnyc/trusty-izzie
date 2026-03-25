@@ -6,3 +6,4 @@ pub mod entities;
 pub mod health;
 pub mod memories;
 pub mod sync;
+pub mod telegram_proxy;

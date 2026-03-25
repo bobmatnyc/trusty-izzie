@@ -47,5 +47,10 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::agents::list_tasks).post(handlers::agents::create_task),
         )
         .route("/api/tasks/:id", get(handlers::agents::get_task))
+        // Telegram webhook proxy → localhost:3457
+        .route(
+            "/webhook/telegram",
+            post(handlers::telegram_proxy::proxy_webhook),
+        )
         .with_state(state)
 }
