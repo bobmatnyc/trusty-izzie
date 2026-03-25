@@ -91,14 +91,23 @@ impl GoogleAuthClient {
             ("client_id", &self.client_id),
             ("client_secret", &self.client_secret),
         ];
-        let resp: TokenResponse = client
+        let raw_resp = client
             .post("https://oauth2.googleapis.com/token")
             .form(&params)
             .send()
             .await
-            .context("POST to Google token refresh endpoint failed")?
-            .error_for_status()
-            .context("Google token refresh endpoint returned error status")?
+            .context("POST to Google token refresh endpoint failed")?;
+
+        if !raw_resp.status().is_success() {
+            let status = raw_resp.status();
+            let body = raw_resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "could not read body".to_string());
+            anyhow::bail!("Google token refresh returned {status}: {body}");
+        }
+
+        let resp: TokenResponse = raw_resp
             .json()
             .await
             .context("failed to deserialise refresh token response")?;

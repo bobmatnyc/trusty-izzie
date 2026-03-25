@@ -519,7 +519,10 @@ impl EventHandler for MorningBriefingHandler {
             &location,
         )
         .await
-        .unwrap_or_else(|_| "Here are today's priorities.".to_string());
+        .unwrap_or_else(|e| {
+            warn!("MorningBriefing: LLM call failed: {e}");
+            "⚠️ Morning briefing failed — could not reach LLM.".to_string()
+        });
 
         send_telegram_push(&store.sqlite, &briefing).await?;
         info!("MorningBriefing sent");
@@ -680,6 +683,6 @@ Today's calendar:\n{}\n\nOpen tasks (all accounts):\n{}{}",
         .map_err(|e| TrustyError::Serialization(e.to_string()))?;
     Ok(json["choices"][0]["message"]["content"]
         .as_str()
-        .unwrap_or("Here are today's priorities.")
+        .unwrap_or("⚠️ Morning briefing: LLM returned empty response.")
         .to_string())
 }

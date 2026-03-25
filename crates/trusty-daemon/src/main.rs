@@ -80,6 +80,26 @@ enum DaemonCmd {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env BEFORE anything else — launchd doesn't pass env vars like
+    // GOOGLE_CLIENT_SECRET, so we need dotenvy to pick them up from the
+    // project .env (WorkingDirectory in the plist) and config.env.
+    dotenvy::dotenv().ok();
+    {
+        let data_dir = std::env::var("TRUSTY_DATA_DIR")
+            .unwrap_or_else(|_| "~/.local/share/trusty-izzie".to_string());
+        let expanded = if data_dir.starts_with("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                format!("{}{}", home, &data_dir[1..])
+            } else {
+                data_dir
+            }
+        } else {
+            data_dir
+        };
+        let config_env = std::path::PathBuf::from(expanded).join("config.env");
+        dotenvy::from_path(&config_env).ok();
+    }
+
     let cli = Cli::parse();
     let config = load_config(cli.config.as_deref()).await?;
     trusty_core::secrets::migrate_from_env();
