@@ -27,6 +27,7 @@ impl EveningBriefingHandler {
 }
 
 struct EveningContext {
+    today_events: Vec<String>,
     tomorrow_events: Vec<String>,
     tasks: Vec<String>,
 }
@@ -37,6 +38,7 @@ async fn fetch_evening_context(sqlite: &SqliteStore, maps_provider: &str) -> Eve
         Err(e) => {
             warn!("Could not list accounts for evening briefing: {e}");
             return EveningContext {
+                today_events: vec![],
                 tomorrow_events: vec![],
                 tasks: vec![],
             };
@@ -46,13 +48,15 @@ async fn fetch_evening_context(sqlite: &SqliteStore, maps_provider: &str) -> Eve
     let active: Vec<_> = accounts.into_iter().filter(|a| a.is_active).collect();
     if active.is_empty() {
         return EveningContext {
+            today_events: vec![],
             tomorrow_events: vec![],
             tasks: vec![],
         };
     }
 
     let http = reqwest::Client::new();
-    let mut all_events = Vec::new();
+    let mut all_today_events = Vec::new();
+    let mut all_tomorrow_events = Vec::new();
     let mut all_tasks = Vec::new();
 
     for account in &active {
@@ -67,16 +71,99 @@ async fn fetch_evening_context(sqlite: &SqliteStore, maps_provider: &str) -> Eve
             }
         };
         let tag = format!("[{}]", account.identity);
-        let events = fetch_tomorrow_events(&http, &access_token, &tag, maps_provider).await;
+        let today = fetch_today_events(&http, &access_token, &tag).await;
+        let tomorrow = fetch_tomorrow_events(&http, &access_token, &tag, maps_provider).await;
         let tasks = fetch_open_tasks(&http, &access_token, &tag).await;
-        all_events.extend(events);
+        all_today_events.extend(today);
+        all_tomorrow_events.extend(tomorrow);
         all_tasks.extend(tasks);
     }
 
     EveningContext {
-        tomorrow_events: all_events,
+        today_events: all_today_events,
+        tomorrow_events: all_tomorrow_events,
         tasks: all_tasks,
     }
+}
+
+async fn fetch_today_events(http: &reqwest::Client, access_token: &str, tag: &str) -> Vec<String> {
+    use chrono::{Local, LocalResult, TimeZone};
+
+    let today = Local::now().date_naive();
+    let today_midnight = today.and_hms_opt(0, 0, 0).unwrap();
+    let today_eod = today.and_hms_opt(23, 59, 59).unwrap();
+
+    let now_utc = chrono::Utc::now();
+
+    let time_min_utc = match Local.from_local_datetime(&today_midnight) {
+        LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc),
+        LocalResult::Ambiguous(dt, _) => dt.with_timezone(&chrono::Utc),
+        LocalResult::None => now_utc - chrono::Duration::hours(24),
+    };
+    let time_max_utc = match Local.from_local_datetime(&today_eod) {
+        LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc),
+        LocalResult::Ambiguous(dt, _) => dt.with_timezone(&chrono::Utc),
+        LocalResult::None => now_utc,
+    };
+
+    let time_min_str = time_min_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let time_max_str = time_max_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    let url = format!(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events\
+         ?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=20",
+        time_min_str, time_max_str
+    );
+
+    let events_json: serde_json::Value = match http
+        .get(&url)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())
+    {
+        Err(e) => {
+            warn!("Calendar API request failed (today recap): {e}");
+            return vec![];
+        }
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Calendar API parse failed (today recap): {e}");
+                return vec![];
+            }
+        },
+    };
+
+    if events_json.get("error").is_some() {
+        return vec![];
+    }
+
+    let items = match events_json["items"].as_array() {
+        Some(a) if !a.is_empty() => a.clone(),
+        _ => return vec![],
+    };
+
+    let mut lines = Vec::new();
+    for item in &items {
+        if item["status"].as_str() == Some("cancelled") {
+            continue;
+        }
+        let summary = item["summary"].as_str().unwrap_or("(no title)");
+        let start = item["start"]["dateTime"]
+            .as_str()
+            .or_else(|| item["start"]["date"].as_str())
+            .unwrap_or("unknown time");
+        let location = item["location"].as_str().unwrap_or("");
+
+        let mut line = format!("• {} — {}", start, summary);
+        if !location.is_empty() {
+            line.push_str(&format!(" @ {}", location));
+        }
+        line.push_str(&format!(" {}", tag));
+        lines.push(line);
+    }
+    lines
 }
 
 async fn fetch_tomorrow_events(
@@ -213,7 +300,7 @@ impl EventHandler for EveningBriefingHandler {
             &location,
         )
         .await
-        .unwrap_or_else(|_| "End of day.".to_string());
+        .unwrap_or_else(|_| "Nothing notable today. Tomorrow looks clear too.".to_string());
 
         send_telegram_push(&store.sqlite, &briefing).await?;
         info!("EveningBriefing sent");
@@ -262,6 +349,12 @@ async fn generate_evening_briefing(
         format!("User's current location: {}\n", location)
     };
 
+    let today_text = if ctx.today_events.is_empty() {
+        "No events today".to_string()
+    } else {
+        ctx.today_events.join("\n")
+    };
+
     let events_text = if ctx.tomorrow_events.is_empty() {
         "No events tomorrow".to_string()
     } else {
@@ -276,13 +369,15 @@ async fn generate_evening_briefing(
 
     let prompt = format!(
         "{}{}\
-Give a quick preview of tomorrow's schedule. Plain, direct, no filler. \
-Just list what's on the calendar with times and locations. \
-Flag anything that needs prep tonight (early start, packing, materials, travel). \
-If nothing notable, say so in one line.\n\
-Keep it short — 2-4 bullet points max.\n\n\
-Tomorrow's schedule:\n{}\n\nOpen tasks:\n{}",
-        date_header, location_line, events_text, tasks_text
+End-of-day wrap-up. Three sections:\n\
+1. **Today** — brief recap of what was on the calendar (1-2 lines, past tense)\n\
+2. **Tasks** — any open tasks worth noting\n\
+3. **Tomorrow** — preview of tomorrow's schedule, flag anything needing prep\n\n\
+Tone: conversational but efficient. A trusted assistant wrapping up the day.\n\
+If today was uneventful, say so briefly and focus on tomorrow.\n\
+Keep total length to 4-6 bullet points.\n\n\
+Today's calendar:\n{}\n\nOpen tasks:\n{}\n\nTomorrow's schedule:\n{}",
+        date_header, location_line, today_text, tasks_text, events_text
     );
 
     let client = reqwest::Client::new();
@@ -293,7 +388,7 @@ Tomorrow's schedule:\n{}\n\nOpen tasks:\n{}",
         .json(&serde_json::json!({
             "model": "anthropic/claude-haiku-4.5",
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 200
+            "max_tokens": 350
         }))
         .send()
         .await
@@ -305,6 +400,6 @@ Tomorrow's schedule:\n{}\n\nOpen tasks:\n{}",
         .map_err(|e| TrustyError::Serialization(e.to_string()))?;
     Ok(json["choices"][0]["message"]["content"]
         .as_str()
-        .unwrap_or("End of day.")
+        .unwrap_or("Nothing notable today. Tomorrow looks clear too.")
         .to_string())
 }

@@ -60,6 +60,112 @@ pub async fn send_telegram_push(sqlite: &SqliteStore, text: &str) -> Result<(), 
     Ok(())
 }
 
+/// Send a Telegram message and return the message_id from the API response.
+pub async fn send_telegram_push_with_id(
+    sqlite: &SqliteStore,
+    text: &str,
+) -> Result<Option<i64>, TrustyError> {
+    let bot_token = match sqlite
+        .get_config("telegram_bot_token")
+        .map_err(|e| TrustyError::Storage(e.to_string()))?
+    {
+        Some(t) => t,
+        None => {
+            error!("send_telegram_push_with_id: no telegram_bot_token configured");
+            return Ok(None);
+        }
+    };
+
+    let chat_id = match sqlite
+        .get_config("telegram_primary_chat_id")
+        .map_err(|e| TrustyError::Storage(e.to_string()))?
+    {
+        Some(id) => id,
+        None => {
+            info!("send_telegram_push_with_id: no telegram_primary_chat_id yet — skipping push");
+            return Ok(None);
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let url = format!("https://api.telegram.org/bot{}/sendMessage", bot_token);
+
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }))
+        .send()
+        .await
+        .map_err(|e| TrustyError::Http(format!("Telegram push failed: {e}")))?;
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| TrustyError::Http(format!("Telegram response parse failed: {e}")))?;
+
+    if json["ok"].as_bool() == Some(true) {
+        let message_id = json["result"]["message_id"].as_i64();
+        Ok(message_id)
+    } else {
+        error!("Telegram push error: {}", json);
+        Ok(None)
+    }
+}
+
+/// Edit an existing Telegram message. Returns true if successful.
+pub async fn edit_telegram_message(
+    sqlite: &SqliteStore,
+    message_id: i64,
+    text: &str,
+) -> Result<bool, TrustyError> {
+    let bot_token = match sqlite
+        .get_config("telegram_bot_token")
+        .map_err(|e| TrustyError::Storage(e.to_string()))?
+    {
+        Some(t) => t,
+        None => {
+            error!("edit_telegram_message: no telegram_bot_token configured");
+            return Ok(false);
+        }
+    };
+
+    let chat_id = match sqlite
+        .get_config("telegram_primary_chat_id")
+        .map_err(|e| TrustyError::Storage(e.to_string()))?
+    {
+        Some(id) => id,
+        None => {
+            info!("edit_telegram_message: no telegram_primary_chat_id yet — skipping");
+            return Ok(false);
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let url = format!("https://api.telegram.org/bot{}/editMessageText", bot_token);
+
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }))
+        .send()
+        .await
+        .map_err(|e| TrustyError::Http(format!("Telegram edit failed: {e}")))?;
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| TrustyError::Http(format!("Telegram edit response parse failed: {e}")))?;
+
+    Ok(json["ok"].as_bool() == Some(true))
+}
+
 fn chunk_text(text: &str, max_len: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();

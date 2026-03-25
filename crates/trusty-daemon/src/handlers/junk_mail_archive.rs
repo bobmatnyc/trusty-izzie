@@ -11,7 +11,7 @@ use trusty_store::{InboxRule, Store};
 use super::{DispatchResult, EventHandler};
 use crate::handlers::morning_briefing::get_valid_token;
 use crate::scheduling::next_interval_ts;
-use crate::telegram_push::send_telegram_push;
+use crate::telegram_push::{edit_telegram_message, send_telegram_push, send_telegram_push_with_id};
 
 pub struct JunkMailArchiveHandler;
 
@@ -285,7 +285,8 @@ impl EventHandler for JunkMailArchiveHandler {
 
         // Build notification sorted by rule name.
         let any_action = totals.values().any(|rs| rs.count > 0);
-        let message = if any_action {
+
+        if any_action {
             let mut lines = vec!["📬 Inbox cleanup:".to_string()];
             let mut sorted: Vec<_> = totals.iter().collect();
             sorted.sort_by_key(|(name, _)| name.as_str());
@@ -299,13 +300,48 @@ impl EventHandler for JunkMailArchiveHandler {
                     lines.push(format!("  • {}: {} {}", name, verb, rs.count));
                 }
             }
-            lines.join("\n")
+            let message = lines.join("\n");
+            if let Err(e) = send_telegram_push(&store.sqlite, &message).await {
+                warn!("JunkMailArchive: telegram push failed: {e}");
+            }
+            // Clear any stored status message_id since we sent a new substantive message
+            let _ = store.sqlite.set_config("junk_mail_status_message_id", "");
         } else {
-            "📬 Inbox check: all clean".to_string()
-        };
+            // Nothing happened — update existing status message or send new
+            let now_str = chrono::Local::now().format("%H:%M").to_string();
+            let status_text = format!("📬 Inbox check: all clean ({})", now_str);
 
-        if let Err(e) = send_telegram_push(&store.sqlite, &message).await {
-            warn!("JunkMailArchive: telegram push failed: {e}");
+            let existing_id = store
+                .sqlite
+                .get_config("junk_mail_status_message_id")
+                .unwrap_or(None)
+                .and_then(|v| v.parse::<i64>().ok());
+
+            if let Some(msg_id) = existing_id {
+                // Try to edit the existing message
+                match edit_telegram_message(&store.sqlite, msg_id, &status_text).await {
+                    Ok(true) => { /* edited successfully */ }
+                    _ => {
+                        // Edit failed (message too old, deleted, etc.) — send new
+                        if let Ok(Some(new_id)) =
+                            send_telegram_push_with_id(&store.sqlite, &status_text).await
+                        {
+                            let _ = store
+                                .sqlite
+                                .set_config("junk_mail_status_message_id", &new_id.to_string());
+                        }
+                    }
+                }
+            } else {
+                // No previous message — send new
+                if let Ok(Some(new_id)) =
+                    send_telegram_push_with_id(&store.sqlite, &status_text).await
+                {
+                    let _ = store
+                        .sqlite
+                        .set_config("junk_mail_status_message_id", &new_id.to_string());
+                }
+            }
         }
 
         Ok(schedule_next_archive(&store.sqlite))
