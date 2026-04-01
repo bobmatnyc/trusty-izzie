@@ -35,7 +35,9 @@ use teloxide::prelude::*;
 use teloxide::types::ChatAction;
 use tracing::{error, info, warn};
 
-use trusty_chat::{context::ContextAssembler, engine::ChatEngine, session::SessionManager};
+use trusty_chat::{
+    context::ContextAssembler, engine::ChatEngine, session::SessionManager, ProgressCallback,
+};
 use trusty_email::auth::{generate_pkce_pair, GoogleAuthClient};
 use trusty_embeddings::{Embedder, EmbeddingModel};
 use trusty_extractor::{EntityExtractor, ExtractorConfig, UserContext};
@@ -357,7 +359,6 @@ async fn edit_message_text(
 }
 
 /// Delete a message (e.g. remove progress placeholder).
-#[allow(dead_code)]
 async fn delete_message(client: &reqwest::Client, token: &str, chat_id: i64, message_id: i64) {
     let endpoint = format!("https://api.telegram.org/bot{token}/deleteMessage");
     let _ = client
@@ -1159,9 +1160,6 @@ async fn webhook_handler(
     let session_manager = Arc::clone(&state.session_manager);
 
     tokio::spawn(async move {
-        // 2. No placeholder message — typing indicator in the header is sufficient.
-        let progress_id: i64 = 0;
-
         // Handle /start and /help commands.
         if text_clone.trim() == "/start" || text_clone.trim() == "/help" {
             let help_text = concat!(
@@ -1177,21 +1175,15 @@ async fn webhook_handler(
                 "• Check service status\n\n",
                 "Just chat naturally — no commands needed for most things."
             );
-            if progress_id > 0 {
-                let _ =
-                    edit_message_text(&http_chat, &token, chat_id, progress_id, help_text, "HTML")
-                        .await;
-            } else {
-                let _ = send_message(
-                    &http_chat,
-                    &token,
-                    chat_id,
-                    help_text,
-                    Some(message_id),
-                    "HTML",
-                )
-                .await;
-            }
+            let _ = send_message(
+                &http_chat,
+                &token,
+                chat_id,
+                help_text,
+                Some(message_id),
+                "HTML",
+            )
+            .await;
             return;
         }
 
@@ -1216,6 +1208,18 @@ async fn webhook_handler(
             None => text_clone.clone(),
         };
 
+        // 2. Send initial status message (will be edited in-place as tools execute).
+        let status_message_id: Option<i64> = send_message(
+            &http_chat,
+            &token,
+            chat_id,
+            "\u{1f914} Thinking\u{2026}",
+            Some(message_id),
+            "",
+        )
+        .await
+        .ok();
+
         // 6. Spawn typing heartbeat — refreshes "typing" every 4s until cancelled.
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
         {
@@ -1235,8 +1239,36 @@ async fn webhook_handler(
             });
         }
 
-        // 3. Process LLM call.
-        match engine.chat(&mut session, &text_clone).await {
+        // Build progress callback to edit status message in-place as tools execute.
+        let progress: Option<ProgressCallback> = status_message_id.map(|mid| {
+            let http_p = http_chat.clone();
+            let token_p = token.clone();
+            let last_edit = Arc::new(tokio::sync::Mutex::new(std::time::Instant::now()));
+            let progress_cb: ProgressCallback = Arc::new(move |friendly: &str, _raw: &str| {
+                let http_p = http_p.clone();
+                let token_p = token_p.clone();
+                let le = last_edit.clone();
+                let text = friendly.to_string();
+                tokio::spawn(async move {
+                    // Debounce: skip if <1s since last edit to avoid Telegram rate limits.
+                    let mut last = le.lock().await;
+                    if last.elapsed() < std::time::Duration::from_secs(1) {
+                        return;
+                    }
+                    *last = std::time::Instant::now();
+                    drop(last);
+
+                    let _ = edit_message_text(&http_p, &token_p, chat_id, mid, &text, "").await;
+                });
+            });
+            progress_cb
+        });
+
+        // 3. Process LLM call with progress updates.
+        match engine
+            .chat_with_progress(&mut session, &text_clone, progress)
+            .await
+        {
             Ok(response) => {
                 // Stop heartbeat.
                 let _ = cancel_tx.send(());
@@ -1246,6 +1278,11 @@ async fn webhook_handler(
                     "Chat turn complete"
                 );
 
+                // Delete the status message before sending the real reply.
+                if let Some(mid) = status_message_id {
+                    delete_message(&http_chat, &token, chat_id, mid).await;
+                }
+
                 // Use a fallback if the LLM returns an empty reply.
                 let reply_owned;
                 let reply_text: &str = if response.reply.trim().is_empty() {
@@ -1254,7 +1291,7 @@ async fn webhook_handler(
                 } else {
                     &response.reply
                 };
-                // 4. Send reply (no placeholder message — typing indicator in header handles UX).
+                // 4. Send final reply as a fresh message.
                 let _ = send_reply_smart(&http_chat, &token, chat_id, reply_text, Some(message_id))
                     .await;
 
@@ -1318,10 +1355,10 @@ async fn webhook_handler(
                 } else {
                     format!("⚠️ Error: {}", &e_str[..e_str.len().min(120)])
                 };
-                if progress_id > 0 {
+                // Edit the status message to show the error, or send a new one.
+                if let Some(mid) = status_message_id {
                     let _ =
-                        edit_message_text(&http_chat, &token, chat_id, progress_id, &err_text, "")
-                            .await;
+                        edit_message_text(&http_chat, &token, chat_id, mid, &err_text, "").await;
                 } else {
                     let _ = send_reply(&http_chat, &token, chat_id, &err_text).await;
                 }

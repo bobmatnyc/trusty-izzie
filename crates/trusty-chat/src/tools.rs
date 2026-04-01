@@ -150,6 +150,56 @@ pub enum ToolName {
     RemoveInboxRule,
 }
 
+impl ToolName {
+    /// Return a human-friendly status string for display while the tool executes.
+    pub fn friendly_status(&self) -> &'static str {
+        match self {
+            Self::SearchMemories => "\u{1f4ad} Searching my memory\u{2026}",
+            Self::SearchEntities => "\u{1f50d} Looking up people and places\u{2026}",
+            Self::GetEntityRelationships => "\u{1f517} Checking connections\u{2026}",
+            Self::SaveMemory => "\u{1f4be} Saving to memory\u{2026}",
+            Self::GetCalendarEvents | Self::ListEvents => {
+                "\u{1f4c5} Checking your calendar\u{2026}"
+            }
+            Self::CreateCalendarEvent => "\u{1f4c5} Creating calendar event\u{2026}",
+            Self::UpdateCalendarEvent => "\u{1f4c5} Updating calendar event\u{2026}",
+            Self::SearchEmails => "\u{1f4e7} Searching email\u{2026}",
+            Self::SendEmail | Self::ReplyEmail => "\u{2709}\u{fe0f} Composing email\u{2026}",
+            Self::WebSearch | Self::TavilySearch | Self::SerpApiSearch => {
+                "\u{1f50d} Searching the web\u{2026}"
+            }
+            Self::FetchPage | Self::FirecrawlScrape => "\u{1f310} Reading webpage\u{2026}",
+            Self::SkyvernTask => "\u{1f916} Running browser task\u{2026}",
+            Self::GetWeather | Self::GetWeatherAlerts => {
+                "\u{1f324}\u{fe0f} Checking weather\u{2026}"
+            }
+            Self::GetTrainSchedule | Self::GetTrainAlerts => {
+                "\u{1f682} Checking train schedule\u{2026}"
+            }
+            Self::SearchImessages => "\u{1f4ac} Searching iMessage\u{2026}",
+            Self::SearchWhatsapp => "\u{1f4ac} Searching WhatsApp\u{2026}",
+            Self::SearchSlack => "\u{1f4ac} Searching Slack\u{2026}",
+            Self::SearchContacts => "\u{1f464} Looking up contacts\u{2026}",
+            Self::SearchAll => "\u{1f50d} Searching everything\u{2026}",
+            Self::ExecuteShellCommand => "\u{2699}\u{fe0f} Running command\u{2026}",
+            Self::GetTaskLists | Self::GetTasks | Self::GetTasksBulk => {
+                "\u{1f4cb} Checking tasks\u{2026}"
+            }
+            Self::CreateTask | Self::CompleteTask => "\u{2705} Updating tasks\u{2026}",
+            Self::CheckServiceStatus | Self::GetIzzieStatus => "\u{1f4ca} Checking status\u{2026}",
+            Self::ListAgents | Self::RunAgent | Self::GetAgentTask => {
+                "\u{1f916} Managing agents\u{2026}"
+            }
+            Self::ScheduleEvent => "\u{23f0} Scheduling event\u{2026}",
+            Self::SearchSkills | Self::CreateSkill => "\u{1f9e0} Working with skills\u{2026}",
+            Self::ListAccounts | Self::AddAccount | Self::RemoveAccount => {
+                "\u{1f4e8} Managing accounts\u{2026}"
+            }
+            _ => "\u{1f914} Thinking\u{2026}",
+        }
+    }
+}
+
 /// A parsed tool call request from the LLM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {

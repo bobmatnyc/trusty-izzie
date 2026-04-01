@@ -10,5 +10,5 @@ pub mod skills;
 pub mod tools;
 
 pub use context::ContextAssembler;
-pub use engine::ChatEngine;
+pub use engine::{ChatEngine, ProgressCallback};
 pub use session::SessionManager;

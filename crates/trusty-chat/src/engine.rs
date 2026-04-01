@@ -16,6 +16,9 @@ use trusty_store::SqliteStore;
 use crate::context::ContextAssembler;
 use crate::tools::ToolName;
 
+/// Callback invoked before each tool execution with (tool_friendly_status, tool_raw_name).
+pub type ProgressCallback = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 // Fallback when TRUSTY_PRIMARY_EMAIL env var is not set.
 // Set TRUSTY_PRIMARY_EMAIL in your .env to your Google account email.
 const PRIMARY_EMAIL: &str = "";
@@ -2820,6 +2823,17 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
         session: &mut ChatSession,
         user_message: &str,
     ) -> Result<StructuredResponse> {
+        self.chat_with_progress(session, user_message, None).await
+    }
+
+    /// Like [`chat`], but accepts an optional progress callback that is invoked
+    /// before each tool execution with a human-friendly status string.
+    pub async fn chat_with_progress(
+        &self,
+        session: &mut ChatSession,
+        user_message: &str,
+        progress: Option<ProgressCallback>,
+    ) -> Result<StructuredResponse> {
         // 0. Check for skill activation intent before anything else.
         if let Some((env_key, api_key_value)) = detect_skill_activation(user_message) {
             // Set in current process so subsequent tool calls in this process see it.
@@ -3044,6 +3058,15 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
             // Execute each requested tool.
             let mut results_text = String::new();
             for tc in &tool_calls {
+                // Notify progress callback before execution.
+                if let Some(ref cb) = progress {
+                    let friendly = serde_json::from_value::<ToolName>(serde_json::Value::String(
+                        tc.name.clone(),
+                    ))
+                    .map(|tn| tn.friendly_status())
+                    .unwrap_or("\u{1f914} Thinking\u{2026}");
+                    cb(friendly, &tc.name);
+                }
                 let raw = self
                     .execute_tool_by_name(&tc.name, &tc.arguments)
                     .await
