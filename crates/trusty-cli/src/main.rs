@@ -278,10 +278,13 @@ fn open_sqlite(config: &AppConfig) -> Result<Arc<SqliteStore>> {
     Ok(Arc::new(store))
 }
 
-/// Open full Store (LanceDB + Kuzu + SQLite).
+/// Open full Store (LanceDB + Kuzu + SQLite) with Kuzu in read-only mode.
+/// Only trusty-daemon opens Kuzu read-write.
 async fn open_store(config: &AppConfig) -> Result<Arc<Store>> {
     let dir = data_dir(config);
-    Ok(Arc::new(Store::open(&dir, &load_instance_id()).await?))
+    Ok(Arc::new(
+        Store::open_read_only(&dir, &load_instance_id()).await?,
+    ))
 }
 
 fn is_tty() -> bool {

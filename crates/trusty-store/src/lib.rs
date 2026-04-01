@@ -25,6 +25,7 @@ use tracing::warn;
 /// returns `None` and the caller should degrade gracefully.
 pub struct LazyGraph {
     path: PathBuf,
+    read_only: bool,
     inner: OnceCell<Option<Arc<GraphStore>>>,
 }
 
@@ -32,6 +33,15 @@ impl LazyGraph {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
+            read_only: false,
+            inner: OnceCell::new(),
+        }
+    }
+
+    pub fn new_read_only(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            read_only: true,
             inner: OnceCell::new(),
         }
     }
@@ -42,7 +52,12 @@ impl LazyGraph {
     pub async fn get(&self) -> Option<Arc<GraphStore>> {
         self.inner
             .get_or_init(|| async {
-                match GraphStore::open(&self.path) {
+                let result = if self.read_only {
+                    GraphStore::open_read_only(&self.path)
+                } else {
+                    GraphStore::open(&self.path)
+                };
+                match result {
                     Ok(gs) => Some(Arc::new(gs)),
                     Err(e) => {
                         warn!(
@@ -65,8 +80,9 @@ pub struct Store {
     pub lance: Arc<LanceStore>,
     /// Knowledge graph of entities and relationships.
     ///
-    /// For trusty-telegram this is eagerly opened; for trusty-daemon it is lazy
-    /// so the daemon can start even when trusty-telegram holds the KuzuDB lock.
+    /// Only trusty-daemon opens this read-write. All other processes
+    /// (trusty-api, trusty-telegram, trusty-mcp) open read-only to avoid
+    /// Kuzu lock contention.
     pub graph: LazyGraph,
     /// Auth tokens, history cursors, and application config.
     pub sqlite: Arc<SqliteStore>,
@@ -81,13 +97,27 @@ impl Store {
     ///
     /// Directories are created automatically if they do not exist.
     pub async fn open(data_dir: &Path, user_id: &str) -> Result<Self> {
+        Self::open_with_mode(data_dir, user_id, false).await
+    }
+
+    /// Open all three storage backends with KuzuDB in read-only mode.
+    ///
+    /// Use this in non-daemon processes (trusty-api, trusty-telegram, trusty-mcp)
+    /// to avoid Kuzu lock contention. Only the daemon should open read-write.
+    pub async fn open_read_only(data_dir: &Path, user_id: &str) -> Result<Self> {
+        Self::open_with_mode(data_dir, user_id, true).await
+    }
+
+    /// Open all three storage backends with the specified KuzuDB access mode.
+    async fn open_with_mode(data_dir: &Path, user_id: &str, read_only: bool) -> Result<Self> {
         std::fs::create_dir_all(data_dir)?;
         let kuzu_path = data_dir.join("kuzu");
 
         // Eager: fail fast if KuzuDB cannot be opened.
-        let graph_store = GraphStore::open(&kuzu_path)?;
+        let graph_store = GraphStore::open_with_mode(&kuzu_path, read_only)?;
         let lazy = LazyGraph {
             path: kuzu_path,
+            read_only,
             inner: OnceCell::new_with(Some(Some(Arc::new(graph_store)))),
         };
 
@@ -117,6 +147,20 @@ impl Store {
         Ok(Self {
             lance: Arc::new(LanceStore::open(&data_dir.join("lance"), user_id).await?),
             graph: LazyGraph::new(data_dir.join("kuzu")),
+            sqlite: Arc::new(SqliteStore::open(&data_dir.join("trusty.db"))?),
+        })
+    }
+
+    /// Open storage backends with **lazy** KuzuDB init in **read-only** mode.
+    ///
+    /// Use this in non-daemon processes (trusty-api, trusty-mcp) that need lazy
+    /// init but should not contend for the Kuzu write lock.
+    pub async fn open_lazy_kuzu_read_only(data_dir: &Path, user_id: &str) -> Result<Self> {
+        std::fs::create_dir_all(data_dir)?;
+
+        Ok(Self {
+            lance: Arc::new(LanceStore::open(&data_dir.join("lance"), user_id).await?),
+            graph: LazyGraph::new_read_only(data_dir.join("kuzu")),
             sqlite: Arc::new(SqliteStore::open(&data_dir.join("trusty.db"))?),
         })
     }

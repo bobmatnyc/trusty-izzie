@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
         let api_key = trusty_core::secrets::get("OPENROUTER_API_KEY").unwrap_or_default();
         let instance_id = load_instance_id(&data_dir);
 
-        match Store::open_lazy_kuzu(&data_dir, &instance_id).await {
+        match Store::open_lazy_kuzu_read_only(&data_dir, &instance_id).await {
             Ok(store) => {
                 let store = Arc::new(store);
                 let engine = Arc::new(

@@ -14,19 +14,36 @@ pub struct GraphStore {
 }
 
 impl GraphStore {
-    /// Open (or create) a Kuzu database at `path`.
+    /// Open (or create) a Kuzu database at `path` in read-write mode.
     ///
     /// Kuzu creates the database directory itself; we only ensure the *parent*
     /// directory exists. Creating the target directory upfront causes EEXIST
     /// failures when a file (e.g. from a Python-created single-file DB) already
     /// occupies that path.
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_mode(path, false)
+    }
+
+    /// Open an existing Kuzu database at `path` in read-only mode.
+    ///
+    /// Read-only mode allows multiple processes to open the database
+    /// concurrently without lock contention. Only the daemon should open
+    /// in read-write mode.
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        Self::open_with_mode(path, true)
+    }
+
+    /// Open a Kuzu database at `path` with the specified read-only mode.
+    pub(crate) fn open_with_mode(path: &Path, read_only: bool) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let db = kuzu::Database::new(path, kuzu::SystemConfig::default())?;
+        let config = kuzu::SystemConfig::default().read_only(read_only);
+        let db = kuzu::Database::new(path, config)?;
         let store = Self { db };
-        store.migrate()?;
+        if !read_only {
+            store.migrate()?;
+        }
         Ok(store)
     }
 

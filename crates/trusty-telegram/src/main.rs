@@ -1911,7 +1911,7 @@ async fn main() -> Result<()> {
                 .collect();
 
             let instance_id = load_instance_id();
-            let store = Arc::new(Store::open(&data_dir, &instance_id).await?);
+            let store = Arc::new(Store::open_read_only(&data_dir, &instance_id).await?);
 
             // Cache entity/memory counts in kv_config so get_izzie_status can report them.
             {
