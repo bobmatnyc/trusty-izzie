@@ -233,6 +233,11 @@ impl LanceStore {
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<(String, f32)>> {
+        tracing::debug!(
+            embedding_len = query_embedding.len(),
+            limit,
+            "search_entities: starting vector search"
+        );
         let table = self.connection.open_table("entities").execute().await?;
 
         let query_vec: Vec<f32> = query_embedding.to_vec();
@@ -261,6 +266,10 @@ impl LanceStore {
                 results.push((id, dist));
             }
         }
+        tracing::info!(
+            results = results.len(),
+            "search_entities: vector search completed"
+        );
         Ok(results)
     }
 
@@ -337,7 +346,14 @@ impl LanceStore {
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<(String, f32)>> {
+        tracing::debug!(
+            embedding_len = query_embedding.len(),
+            limit,
+            "search_memories: starting vector search"
+        );
         let table = self.connection.open_table("memories").execute().await?;
+        let row_count = table.count_rows(None).await.unwrap_or(0);
+        tracing::debug!(row_count, "search_memories: table row count");
 
         let query_vec: Vec<f32> = query_embedding.to_vec();
         let stream = table
@@ -364,6 +380,11 @@ impl LanceStore {
                 results.push((id, dist));
             }
         }
+        tracing::info!(
+            results = results.len(),
+            row_count,
+            "search_memories: vector search completed"
+        );
         Ok(results)
     }
 
@@ -455,7 +476,9 @@ impl LanceStore {
         let table = self.connection.open_table("entities").execute().await?;
         let ql = query.to_lowercase();
 
-        let stream = table.query().limit(20_000).execute().await?;
+        // Use actual row count to avoid "Ran out of fragments" warning.
+        let row_count = table.count_rows(None).await.unwrap_or(20_000) as usize;
+        let stream = table.query().limit(row_count).execute().await?;
         let batches: Vec<RecordBatch> = collect_stream(stream).await?;
         let mut matched = Vec::new();
         for batch in &batches {

@@ -2006,6 +2006,9 @@ async fn main() -> Result<()> {
                     assembler,
                 )
                 .with_sqlite(Arc::clone(&store.sqlite))
+                .with_lance(Arc::clone(&store.lance))
+                .with_embedder(Arc::clone(&embedder))
+                .with_memory_store(Arc::clone(&memory_store))
                 .with_agents_dir(data_dir.join("agents"))
                 .with_skills_dir(config.agents.skills_dir.clone())
                 .with_instance_label(config.instance.label.clone())

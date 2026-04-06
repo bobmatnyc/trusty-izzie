@@ -11,6 +11,7 @@ trusty-models = { path = "../trusty-models" }
 trusty-core = { path = "../trusty-core" }
 trusty-store = { path = "../trusty-store" }
 trusty-memory = { path = "../trusty-memory" }
+trusty-embeddings = { path = "../trusty-embeddings" }
 trusty-extractor = { path = "../trusty-extractor" }
 trusty-email = { path = "../trusty-email" }
 trusty-metro-north = { path = "../trusty-metro-north" }

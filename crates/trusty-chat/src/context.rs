@@ -56,6 +56,13 @@ impl ContextAssembler {
             None => vec![],
         };
 
+        tracing::info!(
+            memories = relevant_memories.len(),
+            entities = relevant_entities.len(),
+            query = query,
+            "context assembly complete"
+        );
+
         Ok(ChatContext {
             relevant_memories,
             relevant_entities,

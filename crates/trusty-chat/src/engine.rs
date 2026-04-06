@@ -9,9 +9,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use trusty_email::auth::GoogleAuthClient;
+use trusty_embeddings::Embedder;
+use trusty_memory::MemoryStore;
 use trusty_models::chat::{ChatMessage, ChatSession, MessageRole, StructuredResponse};
+use trusty_models::memory::MemoryCategory;
 use trusty_models::{EventPayload, EventType};
-use trusty_store::SqliteStore;
+use trusty_store::{LanceStore, SqliteStore};
 
 use crate::context::ContextAssembler;
 use crate::tools::ToolName;
@@ -42,6 +45,12 @@ pub struct ChatEngine {
     skills: Vec<std::sync::Arc<dyn trusty_skill::Skill>>,
     /// Optional instance label injected into the system prompt (e.g. "DEV").
     instance_label: String,
+    /// Optional LanceDB store for memory/entity tool handlers.
+    lance: Option<Arc<LanceStore>>,
+    /// Optional embedder for generating query embeddings in tool handlers.
+    embedder: Option<Arc<Embedder>>,
+    /// Optional memory store for the SaveMemory tool.
+    memory_store: Option<Arc<MemoryStore>>,
 }
 
 // ── OpenRouter request/response types ────────────────────────────────────────
@@ -127,6 +136,9 @@ impl ChatEngine {
             skills_dir: "docs/skills".to_string(),
             skills: vec![],
             instance_label: String::new(),
+            lance: None,
+            embedder: None,
+            memory_store: None,
         }
     }
 
@@ -157,6 +169,24 @@ impl ChatEngine {
     /// Register dynamically-dispatched skills with this engine.
     pub fn with_skills(mut self, skills: Vec<std::sync::Arc<dyn trusty_skill::Skill>>) -> Self {
         self.skills = skills;
+        self
+    }
+
+    /// Attach a `LanceStore` for memory/entity tool dispatch.
+    pub fn with_lance(mut self, lance: Arc<LanceStore>) -> Self {
+        self.lance = Some(lance);
+        self
+    }
+
+    /// Attach an `Embedder` for generating query embeddings in tool handlers.
+    pub fn with_embedder(mut self, embedder: Arc<Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    /// Attach a `MemoryStore` for the SaveMemory tool.
+    pub fn with_memory_store(mut self, memory_store: Arc<MemoryStore>) -> Self {
+        self.memory_store = Some(memory_store);
         self
     }
 
@@ -272,10 +302,10 @@ impl ChatEngine {
             ToolName::ListInboxRules => self.tool_list_inbox_rules(),
             ToolName::AddInboxRule => self.tool_add_inbox_rule(input),
             ToolName::RemoveInboxRule => self.tool_remove_inbox_rule(input),
-            _ => {
-                tracing::warn!(tool = ?name, "tool called but not yet implemented");
-                Ok("Tool not yet implemented.".to_string())
-            }
+            ToolName::SearchMemories => self.tool_search_memories(input).await,
+            ToolName::SearchEntities => self.tool_search_entities(input).await,
+            ToolName::GetEntityRelationships => self.tool_get_entity_relationships(input).await,
+            ToolName::SaveMemory => self.tool_save_memory(input).await,
         }
     }
 
@@ -2529,6 +2559,202 @@ impl ChatEngine {
         }
         self.sqlite_ref()?.delete_inbox_rule(&id)?;
         Ok(format!("Inbox rule {} removed.", id))
+    }
+
+    // ── Memory & Entity tool handlers ──────────────────────────────────────
+
+    /// Search memories by semantic query. Uses embedder for vector search if
+    /// available, falls back to listing recent memories.
+    async fn tool_search_memories(&self, input: &serde_json::Value) -> Result<String> {
+        let lance = match &self.lance {
+            Some(l) => l,
+            None => return Ok("Memory search unavailable: no vector store attached.".to_string()),
+        };
+        let query = input["query"].as_str().unwrap_or("").trim();
+        let limit = input["limit"].as_u64().unwrap_or(10) as usize;
+
+        if query.is_empty() {
+            return Ok("Error: query is required.".to_string());
+        }
+
+        // Try vector search if embedder is available.
+        if let Some(embedder) = &self.embedder {
+            match embedder.embed(query) {
+                Ok(query_embedding) => {
+                    let hits = lance.search_memories(&query_embedding, limit).await?;
+                    if hits.is_empty() {
+                        return Ok("No memories found matching that query.".to_string());
+                    }
+                    // Fetch full memory objects by ID.
+                    let mut results = Vec::new();
+                    for (id, distance) in &hits {
+                        if let Ok(Some(memory)) = lance.get_memory_by_id(id).await {
+                            results.push(serde_json::json!({
+                                "id": memory.id.to_string(),
+                                "content": memory.content,
+                                "category": format!("{:?}", memory.category),
+                                "importance": memory.importance,
+                                "created_at": memory.created_at.to_rfc3339(),
+                                "distance": distance,
+                            }));
+                        }
+                    }
+                    return serde_json::to_string_pretty(&results)
+                        .context("failed to serialize memory results");
+                }
+                Err(e) => {
+                    tracing::warn!("embedder failed, falling back to list: {e}");
+                }
+            }
+        }
+
+        // Fallback: list recent memories (no vector search).
+        let memories = lance.list_memories(limit).await?;
+        if memories.is_empty() {
+            return Ok("No memories found.".to_string());
+        }
+        let results: Vec<serde_json::Value> = memories
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "id": m.id.to_string(),
+                    "content": m.content,
+                    "category": format!("{:?}", m.category),
+                    "importance": m.importance,
+                    "created_at": m.created_at.to_rfc3339(),
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&results).context("failed to serialize memory results")
+    }
+
+    /// Search entities by text query (case-insensitive substring match).
+    async fn tool_search_entities(&self, input: &serde_json::Value) -> Result<String> {
+        let lance = match &self.lance {
+            Some(l) => l,
+            None => return Ok("Entity search unavailable: no vector store attached.".to_string()),
+        };
+        let query = input["query"].as_str().unwrap_or("").trim();
+        let limit = input["limit"].as_u64().unwrap_or(15) as usize;
+
+        if query.is_empty() {
+            return Ok("Error: query is required.".to_string());
+        }
+
+        let entities = lance.search_entities_text(query, limit).await?;
+        if entities.is_empty() {
+            return Ok(format!("No entities found matching '{}'.", query));
+        }
+
+        let results: Vec<serde_json::Value> = entities
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id.to_string(),
+                    "value": e.value,
+                    "type": format!("{:?}", e.entity_type),
+                    "normalized": e.normalized,
+                    "confidence": e.confidence,
+                    "context": e.context,
+                    "occurrence_count": e.occurrence_count,
+                    "last_seen": e.last_seen.to_rfc3339(),
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&results).context("failed to serialize entity results")
+    }
+
+    /// Get relationships for a named entity. Searches for the entity first,
+    /// then queries the graph (Kuzu) if available.
+    async fn tool_get_entity_relationships(&self, input: &serde_json::Value) -> Result<String> {
+        let lance = match &self.lance {
+            Some(l) => l,
+            None => {
+                return Ok(
+                    "Entity lookup unavailable: no vector store attached.".to_string(),
+                )
+            }
+        };
+        let entity_name = input["entity"].as_str().unwrap_or("").trim();
+        if entity_name.is_empty() {
+            return Ok("Error: entity name is required.".to_string());
+        }
+
+        // Find the entity by text search.
+        let matches = lance.search_entities_text(entity_name, 1).await?;
+        if matches.is_empty() {
+            return Ok(format!("No entity found matching '{}'.", entity_name));
+        }
+        let entity = &matches[0];
+
+        // Graph queries require Kuzu, which is not directly wired to the chat
+        // engine. Return entity info and note that graph traversal is pending.
+        let result = serde_json::json!({
+            "entity": {
+                "id": entity.id.to_string(),
+                "value": entity.value,
+                "type": format!("{:?}", entity.entity_type),
+                "normalized": entity.normalized,
+                "confidence": entity.confidence,
+                "context": entity.context,
+                "aliases": entity.aliases,
+                "occurrence_count": entity.occurrence_count,
+                "first_seen": entity.first_seen.to_rfc3339(),
+                "last_seen": entity.last_seen.to_rfc3339(),
+            },
+            "relationships": [],
+            "note": "Graph relationship queries are not yet wired to the chat engine. Entity details shown above."
+        });
+        serde_json::to_string_pretty(&result).context("failed to serialize entity relationships")
+    }
+
+    /// Save a new memory to the vector store.
+    async fn tool_save_memory(&self, input: &serde_json::Value) -> Result<String> {
+        let memory_store = match &self.memory_store {
+            Some(ms) => ms,
+            None => return Ok("Memory save unavailable: no memory store attached.".to_string()),
+        };
+
+        let content = input["content"].as_str().unwrap_or("").trim();
+        if content.is_empty() {
+            return Ok("Error: content is required.".to_string());
+        }
+
+        let category_str = input["category"].as_str().unwrap_or("general");
+        let category = match category_str {
+            "user_preference" => MemoryCategory::UserPreference,
+            "person_fact" => MemoryCategory::PersonFact,
+            "project_fact" => MemoryCategory::ProjectFact,
+            "company_fact" => MemoryCategory::CompanyFact,
+            "recurring_event" => MemoryCategory::RecurringEvent,
+            "decision" => MemoryCategory::Decision,
+            "event" => MemoryCategory::Event,
+            "reminder" => MemoryCategory::Reminder,
+            "location" => MemoryCategory::Location,
+            "contact" => MemoryCategory::Contact,
+            _ => MemoryCategory::General,
+        };
+        let importance = input["importance"]
+            .as_f64()
+            .unwrap_or(0.5) as f32;
+
+        // Use the instance user_id from the lance store if available, else env.
+        let user_id = self
+            .lance
+            .as_ref()
+            .map(|l| l.user_id.clone())
+            .unwrap_or_else(|| {
+                std::env::var("TRUSTY_INSTANCE_ID").unwrap_or_else(|_| "unknown".to_string())
+            });
+
+        let memory = memory_store
+            .save(&user_id, content, category, vec![], importance, None)
+            .await?;
+
+        Ok(format!(
+            "Memory saved (id: {}, category: {:?}, importance: {:.1}).",
+            memory.id, memory.category, memory.importance,
+        ))
     }
 
     fn tool_add_watch_subscription(&self, input: &serde_json::Value) -> Result<String> {
