@@ -65,10 +65,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Storage — LanceDB
-lancedb = "0.15"
-arrow = { version = "53", features = ["prettyprint"] }
-arrow-array = "53"
-arrow-schema = "53"
+lancedb = "0.27"
+arrow = { version = "57", features = ["prettyprint"] }
+arrow-array = "57"
+arrow-schema = "57"
 
 # Graph DB
 kuzu = "0.9"

@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use arrow_array::{
-    Array, BooleanArray, FixedSizeListArray, Float32Array, Int32Array, RecordBatch,
-    RecordBatchIterator, StringArray,
+    Array, BooleanArray, FixedSizeListArray, Float32Array, Int32Array, RecordBatch, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use futures::Stream;
@@ -129,8 +128,10 @@ async fn open_or_create(
         Err(_) => {
             // Table doesn't exist — create it empty
             let empty_batch = RecordBatch::new_empty(schema.clone());
-            let batches = RecordBatchIterator::new(vec![Ok(empty_batch)], schema);
-            let tbl = conn.create_table(name, batches).execute().await?;
+            let tbl = conn
+                .create_table(name, vec![empty_batch])
+                .execute()
+                .await?;
             Ok(tbl)
         }
     }
@@ -221,8 +222,7 @@ impl LanceStore {
             ],
         )?;
 
-        let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
-        table.add(batches).execute().await?;
+        table.add(vec![batch]).execute().await?;
         debug!("upserted entity {}", entity.id);
         Ok(())
     }
@@ -326,8 +326,7 @@ impl LanceStore {
             ],
         )?;
 
-        let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
-        table.add(batches).execute().await?;
+        table.add(vec![batch]).execute().await?;
         debug!("upserted memory {}", memory.id);
         Ok(())
     }

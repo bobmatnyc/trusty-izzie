@@ -10,11 +10,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use arrow_array::{
-    Array, BooleanArray, FixedSizeListArray, Float32Array, Int32Array, RecordBatch,
-    RecordBatchIterator, StringArray,
+    Array, BooleanArray, FixedSizeListArray, Float32Array, Int32Array, RecordBatch, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use lancedb::connection::CreateTableMode;
+use lancedb::database::CreateTableMode;
 use lancedb::query::ExecutableQuery;
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
@@ -100,8 +99,7 @@ async fn migrate_entities(conn: &lancedb::Connection) -> Result<()> {
 
     info!("Rewriting {} entity rows with canonical schema…", total);
 
-    let iter = RecordBatchIterator::new(out_batches.into_iter().map(Ok), schema);
-    conn.create_table("entities", iter)
+    conn.create_table("entities", out_batches)
         .mode(CreateTableMode::Overwrite)
         .execute()
         .await
@@ -304,8 +302,7 @@ async fn migrate_memories(conn: &lancedb::Connection) -> Result<()> {
 
     info!("Rewriting {} memory rows with canonical schema…", total);
 
-    let iter = RecordBatchIterator::new(out_batches.into_iter().map(Ok), schema);
-    conn.create_table("memories", iter)
+    conn.create_table("memories", out_batches)
         .mode(CreateTableMode::Overwrite)
         .execute()
         .await
