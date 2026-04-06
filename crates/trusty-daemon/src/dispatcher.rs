@@ -195,7 +195,7 @@ impl EventDispatcher {
                                     event.max_retries,
                                     e,
                                     serde_json::to_string_pretty(&event.payload)
-                                        .unwrap_or_else(|_| event.payload.to_string()),
+                                        .unwrap_or_else(|_| format!("{:?}", event.payload)),
                                 );
                                 tokio::spawn(async move {
                                     trusty_core::github::file_issue(
