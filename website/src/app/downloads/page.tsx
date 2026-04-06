@@ -8,7 +8,7 @@ import { Github, Download, ArrowRight } from 'lucide-react'
 const GITHUB_URL = 'https://github.com/bobmatnyc/trusty-izzie'
 const RELEASES_URL = 'https://github.com/bobmatnyc/trusty-izzie/releases'
 const RELEASES_API = 'https://api.github.com/repos/bobmatnyc/trusty-izzie/releases/latest'
-const FALLBACK_VERSION = 'v0.1.8'
+const FALLBACK_VERSION = 'v0.1.9'
 
 function buildDmgUrl(version: string): string {
   const bare = version.replace('v', '')
