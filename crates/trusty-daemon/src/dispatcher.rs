@@ -180,6 +180,33 @@ impl EventDispatcher {
                             } else {
                                 None
                             };
+
+                            // Proactively file a GitHub issue when retries are exhausted.
+                            if event.attempts >= event.max_retries {
+                                let title = format!(
+                                    "[daemon] {} handler failed after {} retries",
+                                    event_type_str, event.attempts
+                                );
+                                let body = format!(
+                                    "Event ID: {}\nType: {}\nAttempts: {}/{}\nError: {}\n\nPayload:\n```json\n{}\n```",
+                                    id_str,
+                                    event_type_str,
+                                    event.attempts,
+                                    event.max_retries,
+                                    e,
+                                    serde_json::to_string_pretty(&event.payload)
+                                        .unwrap_or_else(|_| event.payload.to_string()),
+                                );
+                                tokio::spawn(async move {
+                                    trusty_core::github::file_issue(
+                                        &title,
+                                        &body,
+                                        &["bug", "daemon"],
+                                    )
+                                    .await;
+                                });
+                            }
+
                             let sqlite = self.store.sqlite.clone();
                             let id = id_str.clone();
                             let err_str = e.to_string();

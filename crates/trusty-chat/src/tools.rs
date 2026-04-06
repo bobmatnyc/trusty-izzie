@@ -187,6 +187,7 @@ impl ToolName {
             }
             Self::CreateTask | Self::CompleteTask => "\u{2705} Updating tasks\u{2026}",
             Self::CheckServiceStatus | Self::GetIzzieStatus => "\u{1f4ca} Checking status\u{2026}",
+            Self::SubmitGithubIssue => "\u{1f4dd} Filing GitHub issue\u{2026}",
             Self::ListAgents | Self::RunAgent | Self::GetAgentTask => {
                 "\u{1f916} Managing agents\u{2026}"
             }

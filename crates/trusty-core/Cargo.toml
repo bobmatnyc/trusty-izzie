@@ -18,4 +18,6 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 shellexpand = { workspace = true }
 tokio = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
 urlencoding = "2"

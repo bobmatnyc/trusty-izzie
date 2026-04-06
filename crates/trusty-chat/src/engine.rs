@@ -3070,7 +3070,22 @@ Output ONLY the Python code, no markdown fences, no explanation."#;
                 let raw = self
                     .execute_tool_by_name(&tc.name, &tc.arguments)
                     .await
-                    .unwrap_or_else(|e| format!("Error: {e}"));
+                    .unwrap_or_else(|e| {
+                        // Proactively file a GitHub issue for unexpected tool failures.
+                        let tool_name = tc.name.clone();
+                        let input_str = tc.arguments.to_string();
+                        let err_str = e.to_string();
+                        tokio::spawn(async move {
+                            let title = format!("[chat] tool `{}` failed unexpectedly", tool_name);
+                            let body = format!(
+                                "Tool: {}\nInput: {}\nError: {}",
+                                tool_name, input_str, err_str
+                            );
+                            trusty_core::github::file_issue(&title, &body, &["bug", "chat-engine"])
+                                .await;
+                        });
+                        format!("Error: {e}")
+                    });
                 tracing::info!(tool = %tc.name, "tool executed");
                 let result = format_skill_suggestion(&raw);
                 results_text.push_str(&format!("Tool `{}` returned:\n{}\n\n", tc.name, result));
@@ -3533,7 +3548,7 @@ I am trusty-izzie v{}, running as macOS launchd services:
 - API (com.trusty-izzie.api) — REST API on port 3456
 - Telegram (com.trusty-izzie.telegram) — Telegram bot on port 3457
 
-I can check my own service status with `check_service_status`, report my version with `get_version`, file GitHub issues with `submit_github_issue`, and query my full operational state with `get_izzie_status`.
+I can check my own service status with `check_service_status`, report my version with `get_version`, file GitHub issues with `submit_github_issue`, query my full operational state with `get_izzie_status`, and I automatically file GitHub issues when I encounter persistent errors or failures.
 
 ## What I Can Do
 - **Skills discovery**: Use `search_skills` when unsure whether a capability exists — e.g. search "train" to find commute tools, "calendar" for scheduling tools.

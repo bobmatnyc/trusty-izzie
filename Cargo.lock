@@ -10140,9 +10140,11 @@ name = "trusty-core"
 version = "0.1.8"
 dependencies = [
  "anyhow",
+ "chrono",
  "config",
  "dotenvy",
  "serde",
+ "serde_json",
  "shellexpand",
  "thiserror 1.0.69",
  "tokio",
