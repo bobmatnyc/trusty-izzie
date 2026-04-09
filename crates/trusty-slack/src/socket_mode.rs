@@ -67,21 +67,61 @@ async fn get_wss_url(app_token: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("apps.connections.open returned no URL"))
 }
 
+/// Maximum consecutive auth failures before we give up entirely.
+/// After this many failures the task exits — a process restart is required
+/// to retry (presumably after fixing the token).
+const MAX_AUTH_FAILURES: u32 = 5;
+
 /// Run the Socket Mode event loop forever, reconnecting on disconnect.
 /// Call this from a `tokio::spawn` task at startup when SLACK_APP_TOKEN is present.
+///
+/// **Auth failure handling**: if `apps.connections.open` returns `invalid_auth`
+/// (or similar auth error) repeatedly, we apply exponential backoff starting at
+/// 60 s and capped at 30 min.  After [`MAX_AUTH_FAILURES`] consecutive failures
+/// the task logs a warning and exits — no further retries until process restart.
 pub async fn run(state: Arc<SlackState>, app_token: String) {
     let mut backoff_secs = 1u64;
+    let mut consecutive_auth_failures: u32 = 0;
 
     loop {
         match run_once(&state, &app_token).await {
             Ok(()) => {
                 info!("Socket Mode connection closed cleanly — reconnecting immediately");
                 backoff_secs = 1;
+                consecutive_auth_failures = 0;
             }
             Err(e) => {
-                error!("Socket Mode error: {e:#} — reconnecting in {backoff_secs}s");
-                sleep(Duration::from_secs(backoff_secs)).await;
-                backoff_secs = (backoff_secs * 2).min(60);
+                let err_str = format!("{e:#}");
+                let is_auth_error = err_str.contains("invalid_auth")
+                    || err_str.contains("not_authed")
+                    || err_str.contains("token_revoked")
+                    || err_str.contains("account_inactive");
+
+                if is_auth_error {
+                    consecutive_auth_failures += 1;
+
+                    if consecutive_auth_failures >= MAX_AUTH_FAILURES {
+                        error!(
+                            "Slack Socket Mode: {consecutive_auth_failures} consecutive auth failures \
+                             — giving up. Check SLACK_APP_TOKEN and restart the process to retry."
+                        );
+                        return;
+                    }
+
+                    // Exponential backoff for auth errors: 60s → 120s → 240s → 480s → 960s (cap 1800s)
+                    let auth_backoff = (60u64 * 2u64.pow(consecutive_auth_failures - 1)).min(1800);
+                    warn!(
+                        "Socket Mode auth error ({consecutive_auth_failures}/{MAX_AUTH_FAILURES}): \
+                         {err_str} — retrying in {auth_backoff}s"
+                    );
+                    sleep(Duration::from_secs(auth_backoff)).await;
+                } else {
+                    // Non-auth errors: normal reconnect backoff (1s → 2s → ... → 60s)
+                    consecutive_auth_failures = 0;
+                    error!("Socket Mode error: {err_str} — reconnecting in {backoff_secs}s");
+                    sleep(Duration::from_secs(backoff_secs)).await;
+                    backoff_secs = (backoff_secs * 2).min(60);
+                }
             }
         }
     }
