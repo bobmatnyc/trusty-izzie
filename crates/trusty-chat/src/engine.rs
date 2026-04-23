@@ -2669,11 +2669,7 @@ impl ChatEngine {
     async fn tool_get_entity_relationships(&self, input: &serde_json::Value) -> Result<String> {
         let lance = match &self.lance {
             Some(l) => l,
-            None => {
-                return Ok(
-                    "Entity lookup unavailable: no vector store attached.".to_string(),
-                )
-            }
+            None => return Ok("Entity lookup unavailable: no vector store attached.".to_string()),
         };
         let entity_name = input["entity"].as_str().unwrap_or("").trim();
         if entity_name.is_empty() {
@@ -2734,9 +2730,7 @@ impl ChatEngine {
             "contact" => MemoryCategory::Contact,
             _ => MemoryCategory::General,
         };
-        let importance = input["importance"]
-            .as_f64()
-            .unwrap_or(0.5) as f32;
+        let importance = input["importance"].as_f64().unwrap_or(0.5) as f32;
 
         // Use the instance user_id from the lance store if available, else env.
         let user_id = self
@@ -4369,8 +4363,8 @@ impl ChatEngine {
         };
 
         if accounts.is_empty() {
-            return Ok(if specific_account.is_some() {
-                format!("Account '{}' not found.", specific_account.unwrap())
+            return Ok(if let Some(acct) = specific_account {
+                format!("Account '{}' not found.", acct)
             } else {
                 "No connected accounts.".into()
             });

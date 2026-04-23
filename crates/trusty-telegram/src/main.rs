@@ -856,11 +856,22 @@ async fn oauth_callback_handler(
     )
 }
 
+/// Standard success response body — Telegram accepts any 2xx but expects JSON.
+fn ok_body() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ok": true }))
+}
+
+/// Standard error response body — still returns 200 in most cases so Telegram
+/// doesn't retry indefinitely, but conveys the error for debugging.
+fn err_body(msg: &str) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ok": false, "error": msg }))
+}
+
 async fn webhook_handler(
     State(state): State<Arc<WebhookState>>,
     headers: axum::http::HeaderMap,
     Json(update): Json<IncomingUpdate>,
-) -> StatusCode {
+) -> (StatusCode, Json<serde_json::Value>) {
     // Validate the Telegram webhook secret token.
     let expected = state
         .sqlite
@@ -872,12 +883,21 @@ async fn webhook_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !expected.is_empty() && provided != expected {
-        warn!("webhook: rejected request with invalid secret token");
-        return StatusCode::FORBIDDEN;
+        error!(
+            expected_len = expected.len(),
+            provided_len = provided.len(),
+            provided_empty = provided.is_empty(),
+            "webhook: rejected request with invalid secret token — \
+             re-register webhook via 'trusty-telegram start' to sync secrets"
+        );
+        return (StatusCode::FORBIDDEN, err_body("invalid secret token"));
     }
     let msg = match update.message {
         Some(m) => m,
-        None => return StatusCode::OK,
+        None => {
+            tracing::debug!("webhook: received update with no message field");
+            return (StatusCode::OK, ok_body());
+        }
     };
 
     let chat_id = msg.chat.id;
@@ -898,7 +918,7 @@ async fn webhook_handler(
             tokio::spawn(async move {
                 let _ = send_reply(&http, &token, chat_id, "Not authorized.").await;
             });
-            return StatusCode::OK;
+            return (StatusCode::OK, ok_body());
         }
     }
 
@@ -975,7 +995,7 @@ async fn webhook_handler(
                 }
             }
         });
-        return StatusCode::OK;
+        return (StatusCode::OK, ok_body());
     }
 
     // Handle Telegram location share (GPS coordinates).
@@ -1017,13 +1037,16 @@ async fn webhook_handler(
             )
             .await;
         });
-        return StatusCode::OK;
+        return (StatusCode::OK, ok_body());
     }
 
     let reply_context = msg.reply_to_message;
     let text = match msg.text {
         Some(t) => t,
-        None => return StatusCode::OK,
+        None => {
+            tracing::debug!("webhook: message has no text, ignoring");
+            return (StatusCode::OK, ok_body());
+        }
     };
 
     // 1. Show typing indicator immediately (fire-and-forget).
@@ -1091,7 +1114,7 @@ async fn webhook_handler(
             });
             let _ = http_auth.post(&endpoint).json(&body).send().await;
         });
-        return StatusCode::OK;
+        return (StatusCode::OK, ok_body());
     }
 
     // Intercept work/personal identity reply after OAuth.
@@ -1126,7 +1149,7 @@ async fn webhook_handler(
                         send_message(&http_ident, &tok, chat_id, &ack, Some(message_id), "HTML")
                             .await;
                 });
-                return StatusCode::OK;
+                return (StatusCode::OK, ok_body());
             }
         }
     }
@@ -1439,7 +1462,8 @@ async fn webhook_handler(
         }
     });
 
-    StatusCode::OK
+    // Acknowledge the webhook immediately; processing continues in the spawned task.
+    (StatusCode::OK, ok_body())
 }
 
 /// Detect a Google Doc URL in text and export its content.
@@ -2119,7 +2143,10 @@ async fn main() -> Result<()> {
             let http = reqwest::Client::new();
             match action {
                 WebhookAction::Set { url } => {
-                    api_set_webhook(&http, &token, &url, None).await?;
+                    // Use the persisted secret token if one exists, so the bot
+                    // server running on :3457 accepts the forwarded requests.
+                    let secret = sqlite.get_config("webhook_secret_token").ok().flatten();
+                    api_set_webhook(&http, &token, &url, secret.as_deref()).await?;
                 }
                 WebhookAction::Clear => {
                     api_delete_webhook(&http, &token).await?;

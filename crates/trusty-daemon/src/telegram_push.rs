@@ -109,7 +109,10 @@ pub async fn send_telegram_push_with_id(
     debug!("send_telegram_push_with_id: response={}", json);
     if json["ok"].as_bool() == Some(true) {
         let message_id = json["result"]["message_id"].as_i64();
-        debug!("send_telegram_push_with_id: extracted message_id={:?}", message_id);
+        debug!(
+            "send_telegram_push_with_id: extracted message_id={:?}",
+            message_id
+        );
         Ok(message_id)
     } else {
         error!("Telegram push error: {}", json);

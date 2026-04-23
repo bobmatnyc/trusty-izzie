@@ -128,10 +128,7 @@ async fn open_or_create(
         Err(_) => {
             // Table doesn't exist — create it empty
             let empty_batch = RecordBatch::new_empty(schema.clone());
-            let tbl = conn
-                .create_table(name, vec![empty_batch])
-                .execute()
-                .await?;
+            let tbl = conn.create_table(name, vec![empty_batch]).execute().await?;
             Ok(tbl)
         }
     }
@@ -477,7 +474,7 @@ impl LanceStore {
         let ql = query.to_lowercase();
 
         // Use actual row count to avoid "Ran out of fragments" warning.
-        let row_count = table.count_rows(None).await.unwrap_or(20_000) as usize;
+        let row_count = table.count_rows(None).await.unwrap_or(20_000);
         let stream = table.query().limit(row_count).execute().await?;
         let batches: Vec<RecordBatch> = collect_stream(stream).await?;
         let mut matched = Vec::new();
