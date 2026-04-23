@@ -10196,7 +10196,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-api"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -10228,7 +10228,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-chat"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10260,7 +10260,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-cli"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10285,7 +10285,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-core"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10304,7 +10304,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-daemon"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10334,7 +10334,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-email"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -10354,7 +10354,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-embeddings"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "fastembed",
@@ -10369,7 +10369,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-extractor"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10406,7 +10406,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-mcp"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -10437,7 +10437,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-memory"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10472,7 +10472,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-migrate"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -10491,7 +10491,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-models"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "chrono",
  "serde",
@@ -10502,7 +10502,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-skill"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10516,7 +10516,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-slack"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -10548,7 +10548,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-store"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "arrow",
@@ -10573,7 +10573,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-telegram"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10611,7 +10611,7 @@ dependencies = [
 
 [[package]]
 name = "trusty-tui"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
